@@ -1,5 +1,5 @@
-#ifndef _MAIN_HPP_
-#define _MAIN_HPP_
+#ifndef _MAIN_H_
+#define _MAIN_H_
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -16,23 +16,23 @@
 #define WIFI_SSID     "C9-1101"
 #define WIFI_PASS     "printf%d1"
 #define DATA_URL      "https://" API_HOST "/api/data/" DEVICE_ID "/Data"
+#define DATA_PULL_URL      "https://" API_HOST "/api/device/" DEVICE_ID "/cmd"
 #define WSS_HOST      API_HOST
 #define WSS_URL       "/api/ws/device"
 #define TOKEN_URL     "https://" API_HOST "/api/device/" DEVICE_ID "/login"
 #define SEND_INTERVAL 3000U
 
-
-
 #define DEBUG_ENABLE 1
 #if DEBUG_ENABLE
-#define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
-#define DEBUG_PRINTF(...) Serial.printf(__VA_ARGS__)
+#define DEBUG_PRINT(...)   Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTF(...)  Serial.printf(__VA_ARGS__)
 #define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
 #else
 #define DEBUG_PRINT(...)
 #define DEBUG_PRINTF(...)
 #define DEBUG_PRINTLN(...)
 #endif
+
 /*
  * Shared state — defined in main.cpp
  */
@@ -43,7 +43,7 @@ extern QueueHandle_t commandQueue;
 
 /*
  * FreeRTOS queue element for WebSocket commands
- * @payload: pointer into the WebSocket receive buffer (valid until next loop)
+ * @payload: pointer to raw JSON string (valid until next WS loop)
  * @length:  payload byte count
  */
 struct CommandMsg {
@@ -51,15 +51,10 @@ struct CommandMsg {
 	size_t length;
 };
 
-bool connectToWiFi(void);
-bool authbydeviceid(void);
-bool sendSensorData(void);
-String createSensorData(void);
-String extractTokenFromBody(const String &jsonBody);
-String extractTokenFromHeader(const String &setCookieHeader);
+/*
+ * main.cpp declarations
+ */
 void deepSleepIfPossible(void);
-void httpUploadTask(void *pvParameters);
-void cmdProcessTask(void *pvParameters);
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 
-#endif /* _MAIN_HPP_ */
+#endif /* _MAIN_H_ */
