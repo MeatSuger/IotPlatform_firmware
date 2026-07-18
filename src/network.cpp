@@ -2,8 +2,9 @@
 #include "sensor.h"
 
 /**
- * connectToWiFi - Block until connected or 15 s timeout expires
- * Return: true on success, false on timeout
+ * connectToWiFi - Block until connected or 15 s timeout expires.
+ *
+ * Return: true on success, false on timeout.
  */
 bool connectToWiFi(void)
 {
@@ -29,8 +30,11 @@ bool connectToWiFi(void)
 }
 
 /**
- * authbydeviceid - Authenticate to the API server using device credentials
- * Return: true if a token was obtained from either Set-Cookie header or JSON body
+ * authbydeviceid - Authenticate to the API server using device credentials.
+ *
+ * Tries the Set-Cookie header first, then falls back to the JSON body.
+ *
+ * Return: true if a token was obtained.
  */
 bool authbydeviceid(void)
 {
@@ -57,7 +61,7 @@ bool authbydeviceid(void)
 	if (httpCode == HTTP_CODE_OK) {
 		DEBUG_PRINTLN("Login request successful");
 
-		/* Try Set-Cookie header first */
+		/* Try Set-Cookie header first. */
 		String setCookieHeader = http.header("Set-Cookie");
 		DEBUG_PRINT(setCookieHeader);
 		if (!setCookieHeader.isEmpty()) {
@@ -69,7 +73,7 @@ bool authbydeviceid(void)
 			}
 		}
 
-		/* Fall back to JSON body */
+		/* Fall back to JSON body. */
 		if (!authSuccess) {
 			String responseBody = http.getString();
 			authorizationToken = extractTokenFromBody(responseBody);
@@ -100,8 +104,9 @@ bool authbydeviceid(void)
 }
 
 /**
- * sendSensorData - POST sensor JSON to the data endpoint
- * Return: true on 200/201, false on failure or missing auth token
+ * sendSensorData - POST sensor JSON to the data endpoint.
+ *
+ * Return: true on HTTP 200/201, false on failure or when unauthenticated.
  */
 bool sendSensorData(void)
 {
@@ -158,8 +163,12 @@ bool sendSensorData(void)
 }
 
 /**
- * syncPendingCommands - Fetch pending commands on boot, enqueue the latest
- * Return: true if a command was found and enqueued
+ * syncPendingCommands - Fetch pending commands on boot, enqueue the latest.
+ *
+ * Polls the device command endpoint, locates the entry with the highest id,
+ * serializes it and pushes it into commandQueue.
+ *
+ * Return: true if a command was found and enqueued.
  */
 bool syncPendingCommands(void)
 {
@@ -203,7 +212,7 @@ bool syncPendingCommands(void)
 		return false;
 	}
 
-	/* Find the entry with the highest id */
+	/* Find the entry with the highest id. */
 	cJSON *item;
 	cJSON *latest = NULL;
 	int maxId = -1;
@@ -222,7 +231,7 @@ bool syncPendingCommands(void)
 		return false;
 	}
 
-	/* Serialize and enqueue */
+	/* Serialize and enqueue. */
 	char *cmdStr = cJSON_PrintUnformatted(latest);
 	CommandMsg cmdMsg;
 	cmdMsg.payload = cmdStr;
@@ -232,8 +241,8 @@ bool syncPendingCommands(void)
 
 	/*
 	 * cmdStr is leaked intentionally — it lives on the heap and
-	 * the cmdProcessTask will cJSON_Parse a copy anyway.
-	 * Only called once at boot, so the leak is bounded.
+	 * cmdProcessTask will parse it.  Called only once at boot so
+	 * the leak is bounded.
 	 */
 
 	cJSON_Delete(root);
@@ -241,9 +250,10 @@ bool syncPendingCommands(void)
 }
 
 /**
- * extractTokenFromHeader - Parse X-Device-Token out of a Set-Cookie header
- * @setCookieHeader: raw Set-Cookie value
- * Return: token string, or empty string if not found
+ * extractTokenFromHeader - Parse X-Device-Token out of a Set-Cookie header.
+ * @setCookieHeader: raw Set-Cookie header value.
+ *
+ * Return: token string, or empty string if not found.
  */
 String extractTokenFromHeader(const String &setCookieHeader)
 {
@@ -260,9 +270,10 @@ String extractTokenFromHeader(const String &setCookieHeader)
 }
 
 /**
- * extractTokenFromBody - Pull the device token from a JSON login response
- * @jsonBody: raw response body
- * Return: token from data.deviceToken, or empty string on parse failure
+ * extractTokenFromBody - Pull the device token from a JSON login response.
+ * @jsonBody: raw response body.
+ *
+ * Return: token from data.deviceToken, or empty string on parse failure.
  */
 String extractTokenFromBody(const String &jsonBody)
 {
