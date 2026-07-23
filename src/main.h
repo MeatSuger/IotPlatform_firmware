@@ -9,7 +9,7 @@
 #include <WebSocketsClient.h>
 
 /*
- * URL constants — composed at compile time via string literal concatenation
+ * URL constants — composed at compile time via string literal concatenation.
  */
 #define API_HOST      "api.meatsuger.top"
 #define DEVICE_ID     "90431b"
@@ -34,26 +34,23 @@
 #endif
 
 /*
- * Shared state — defined in main.cpp
+ * Shared state — defined in main.cpp.
  */
 extern String authorizationToken;
 extern WebSocketsClient webSocket;
 extern bool isWSConnected;
 extern QueueHandle_t commandQueue;
 
-/*
- * FreeRTOS queue element for WebSocket commands
- * @payload: pointer to raw JSON string (valid until next WS loop)
- * @length:  payload byte count
+/**
+ * struct CommandMsg - FreeRTOS queue element for WebSocket commands.
+ * @payload: pointer to raw JSON string, valid only until next WS loop iteration.
+ * @length:  payload byte count.
  */
 struct CommandMsg {
 	char *payload;
 	size_t length;
 };
 
-/*
- * main.cpp declarations
- */
 void deepSleepIfPossible(void);
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 

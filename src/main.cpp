@@ -69,8 +69,9 @@ void loop(void)
 	webSocket.loop();
 
 	/*
-	 * If WebSocket is down while WiFi is still up the library auto-reconnects
-	 * via setReconnectInterval().  Log the condition at most once per 10s.
+	 * If WebSocket is down while WiFi is still up the library
+	 * auto-reconnects via setReconnectInterval().  Log the condition
+	 * at most once per 10 s to avoid spam.
 	 */
 	if (!isWSConnected && WiFi.status() == WL_CONNECTED) {
 		static unsigned long lastReconnectLog = 0;
@@ -91,7 +92,7 @@ void loop(void)
  *
  * On WStype_TEXT enqueues a CommandMsg for asynchronous processing.
  * On WStype_DISCONNECTED resets the command queue so stale entries are
- * discarded; the next successful connect will re-sync via syncPendingCommands().
+ * discarded; the next connect will re-sync via syncPendingCommands().
  */
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 {
