@@ -2,7 +2,7 @@
 #include "network.h"
 #include "task.h"
 
-/* Global state — exposed via extern in main.hpp */
+/* Global state — exposed via extern in main.h */
 String authorizationToken = "";
 WebSocketsClient webSocket;
 QueueHandle_t commandQueue = NULL;
@@ -33,7 +33,7 @@ void setup(void)
 		ESP.restart();
 	}
 
-	/* Fetch and enqueue the latest pending command before starting tasks */
+	/* Fetch and enqueue the latest pending command before starting tasks. */
 	syncPendingCommands();
 
 	webSocket.beginSSL(WSS_HOST, 443, WSS_URL);
@@ -42,11 +42,11 @@ void setup(void)
 	webSocket.setReconnectInterval(5000);
 	webSocket.onEvent(webSocketEvent);
 
-	/* Core 0: periodic HTTP upload */
+	/* Core 0: periodic HTTP upload. */
 	xTaskCreatePinnedToCore(httpUploadTask, "HttpUploadTask", 10240,
 				NULL, 1, NULL, 0);
 
-	/* Core 1: command processing (offloads JSON parsing from ISR) */
+	/* Core 1: command processing, offloads JSON parsing from ISR. */
 	xTaskCreatePinnedToCore(cmdProcessTask, "CmdProcessTask", 8192,
 				NULL, 2, NULL, 1);
 
@@ -67,16 +67,31 @@ void loop(void)
 	}
 
 	webSocket.loop();
+
+	/*
+	 * If WebSocket is down while WiFi is still up the library auto-reconnects
+	 * via setReconnectInterval().  Log the condition at most once per 10s.
+	 */
+	if (!isWSConnected && WiFi.status() == WL_CONNECTED) {
+		static unsigned long lastReconnectLog = 0;
+		if (millis() - lastReconnectLog > 10000) {
+			DEBUG_PRINTLN("WebSocket disconnected, waiting for auto-reconnect...");
+			lastReconnectLog = millis();
+		}
+	}
+
 	delay(50);
 }
 
 /**
- * webSocketEvent - WebSocket library callback
- * @type:    event type (connected, disconnected, text, error, ping, pong)
- * @payload: raw frame data (valid only during this callback)
- * @length:  payload byte count
+ * webSocketEvent - WebSocket library callback.
+ * @type:    event type (connected, disconnected, text, error, ping, pong).
+ * @payload: raw frame data, valid only during this callback.
+ * @length:  payload byte count.
  *
- * On WStype_TEXT, enqueues a CommandMsg for asynchronous processing.
+ * On WStype_TEXT enqueues a CommandMsg for asynchronous processing.
+ * On WStype_DISCONNECTED resets the command queue so stale entries are
+ * discarded; the next successful connect will re-sync via syncPendingCommands().
  */
 void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 {
@@ -84,11 +99,12 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 	case WStype_DISCONNECTED:
 		DEBUG_PRINTLN("WebSocket disconnected");
 		isWSConnected = false;
+		xQueueReset(commandQueue);
 		break;
 	case WStype_CONNECTED:
 		DEBUG_PRINTLN("WebSocket connected");
 		isWSConnected = true;
-		webSocket.sendTXT("Hello Server!");
+		webSocket.sendPing(NULL, 0);
 		break;
 	case WStype_TEXT: {
 		DEBUG_PRINTF("Message received: %s\n", (char *)payload);
@@ -101,6 +117,7 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
 	}
 	case WStype_ERROR:
 		DEBUG_PRINTF("WebSocket error: %s\n", (char *)payload);
+		isWSConnected = false;
 		break;
 	case WStype_PING:
 		DEBUG_PRINTLN("Ping received");

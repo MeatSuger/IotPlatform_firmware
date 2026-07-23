@@ -3,8 +3,8 @@
 #include "network.h"
 
 /**
- * httpUploadTask - FreeRTOS task: periodically POST sensor data on Core 0
- * @pvParameters: unused
+ * httpUploadTask - FreeRTOS task: periodically POST sensor data on Core 0.
+ * @pvParameters: unused.
  */
 void httpUploadTask(void *pvParameters)
 {
@@ -22,16 +22,17 @@ void httpUploadTask(void *pvParameters)
 }
 
 /**
- * cmdProcessTask - FreeRTOS task: dequeue, execute, and respond to WS commands
- * @pvParameters: unused
+ * cmdProcessTask - Dequeue, execute, and respond to WebSocket commands on Core 1.
+ * @pvParameters: unused.
  *
  * Supported payload.action values:
- *   "on"     - digitalWrite(pin, HIGH)
- *   "off"    - digitalWrite(pin, LOW)
- *   "toggle" - digitalWrite(pin, !digitalRead(pin))
- *   "pwm"    - analogWrite(pin, duty) with value 0-100
+ *   "on"     — digitalWrite(pin, HIGH)
+ *   "off"    — digitalWrite(pin, LOW)
+ *   "toggle" — digitalWrite(pin, !digitalRead(pin))
+ *   "pwm"    — analogWrite(pin, duty), value range 0–100
  *
  * Sends a JSON response back via WebSocket after each command.
+ * Responses are silently dropped when the WebSocket is disconnected.
  */
 void cmdProcessTask(void *pvParameters)
 {
@@ -46,8 +47,9 @@ void cmdProcessTask(void *pvParameters)
 
 		cJSON *root = cJSON_Parse(cmdMsg.payload);
 		if (root == NULL) {
-			webSocket.sendTXT(
-				"{\"type\":\"response\",\"status\":\"parse_error\"}");
+			if (isWSConnected)
+				webSocket.sendTXT(
+					"{\"type\":\"response\",\"status\":\"parse_error\"}");
 			continue;
 		}
 
@@ -94,7 +96,7 @@ void cmdProcessTask(void *pvParameters)
 			}
 		}
 
-		/* Build and send WebSocket response */
+		/* Build response, only send when WebSocket is connected. */
 		cJSON *resp = cJSON_CreateObject();
 		cJSON_AddStringToObject(resp, "type", "response");
 		if (id != NULL)
@@ -103,8 +105,12 @@ void cmdProcessTask(void *pvParameters)
 		cJSON_AddStringToObject(resp, "status",
 					executed ? "ok" : "skipped");
 		char *respStr = cJSON_PrintUnformatted(resp);
-		webSocket.sendTXT(respStr);
-		DEBUG_PRINTF("Response sent: %s\n", respStr);
+		if (isWSConnected) {
+			webSocket.sendTXT(respStr);
+			DEBUG_PRINTF("Response sent: %s\n", respStr);
+		} else {
+			DEBUG_PRINTF("WS disconnected, response dropped: %s\n", respStr);
+		}
 		cJSON_free(respStr);
 		cJSON_Delete(resp);
 
