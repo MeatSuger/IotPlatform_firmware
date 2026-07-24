@@ -22,8 +22,8 @@ String createSensorData(void)
 	cJSON_AddStringToObject(internalTemp, "type", "temp");
 
 	char buf[16];
-	snprintf(buf, sizeof(buf), "%.2f", temperatureRead());
-	cJSON_AddStringToObject(internalTemp, "value", buf);
+	double val = round(temperatureRead() * 100.0) / 100.0;
+	cJSON_AddNumberToObject(internalTemp, "value", val);
 
 	char *jsonStr = cJSON_PrintUnformatted(root);
 	String jsonString = String(jsonStr);

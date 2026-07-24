@@ -22,7 +22,7 @@
 #define TOKEN_URL     "https://" API_HOST "/api/device/" DEVICE_ID "/login"
 #define SEND_INTERVAL 3000U
 
-#define DEBUG_ENABLE 1
+#define DEBUG_ENABLE 0
 #if DEBUG_ENABLE
 #define DEBUG_PRINT(...)   Serial.print(__VA_ARGS__)
 #define DEBUG_PRINTF(...)  Serial.printf(__VA_ARGS__)
