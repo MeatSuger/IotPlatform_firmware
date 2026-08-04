@@ -1,5 +1,6 @@
 #include "token.h"
 
+#include <stdlib.h> /* malloc/free */
 #include <string.h>
 #include "nvs_flash.h"
 #include "esp_log.h"

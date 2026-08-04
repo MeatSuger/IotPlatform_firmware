@@ -4,7 +4,7 @@
 #include "sensor.h"
 #include "task.h"
 #include "esp_wpa.h" /* esp_supplicant_disable_pmk_caching */
-#include "esp_task_wdt.h"
+#include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
 
 
 /* --------------------------------------------------------------------------

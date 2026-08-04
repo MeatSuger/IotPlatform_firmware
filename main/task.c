@@ -1,10 +1,9 @@
 #include "task.h"
-#include "sensor.h"
 #include "network.h"
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
-#include "esp_log.h"
+#include "cJSON.h"
 
 /* --------------------------------------------------------------------------
  * LEDC configuration for analogWrite (PWM) replacement.
