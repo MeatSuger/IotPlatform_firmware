@@ -5,7 +5,6 @@ idf_component_register(
          "task.c"
          "token.c"
     REQUIRES
-        cjson
         driver
         esp_driver_gpio
         esp_driver_ledc
@@ -15,7 +14,6 @@ idf_component_register(
         esp-tls
         esp_event
         esp_wifi
-        mqtt
         nvs_flash
         wpa_supplicant
     INCLUDE_DIRS "."
