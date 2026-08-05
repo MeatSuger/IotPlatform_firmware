@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "main.h"
+#include "common.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
 

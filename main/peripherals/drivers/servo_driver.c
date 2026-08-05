@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-#include "main.h"
+#include "common.h"
 #include "cJSON.h"
 #include "ledc_pool.h"
 

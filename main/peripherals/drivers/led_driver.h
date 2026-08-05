@@ -17,8 +17,7 @@
  * Device config (MQTT "config" command):
  *   {"driver":"led","config":{"gpio":48,"count":1}}
  * Control command (action = device name):
- *   {"action":"led","value":{"r":255,"g":0,"b":0}}              — all LEDs
- *   {"action":"led","value":{"r":0,"g":255,"b":0,"index":1}}    — one LED
+ *   {"action":"led","value":{"r":255,"g":0,"b":0}}   — set strip color
  * -------------------------------------------------------------------------- */
 
 #ifndef WS2812_ENABLE

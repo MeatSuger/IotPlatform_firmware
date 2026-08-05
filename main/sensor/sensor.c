@@ -1,9 +1,11 @@
 #include "sensor.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include "cJSON.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
+#include "mqtt_app.h"
 
 /* --------------------------------------------------------------------------
  * Temperature sensor: use the new driver on chips that support it
@@ -89,4 +91,22 @@ char *createSensorData(void)
     char *jsonStr = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return jsonStr;
+}
+
+/* --------------------------------------------------------------------------
+ * sensor_publish_data — build the sensor JSON and publish it via MQTT
+ * to the data topic (MQTT_TOPIC_DATA).
+ * -------------------------------------------------------------------------- */
+bool sensor_publish_data(void)
+{
+    char *jsonStr = createSensorData();
+    if (jsonStr == NULL)
+    {
+        DEBUG_PRINTLN("Failed to convert sensor data to JSON");
+        return false;
+    }
+
+    bool ok = mqtt_publish(MQTT_TOPIC_DATA, jsonStr, strlen(jsonStr));
+    free(jsonStr);
+    return ok;
 }

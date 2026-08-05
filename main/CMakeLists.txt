@@ -1,5 +1,11 @@
 idf_component_register(
-    SRC_DIRS "."
+    SRC_DIRS "core"
+             "wifi"
+             "mqtt"
+             "app"
+             "net"
+             "sensor"
+             "token"
              "peripherals"
              "peripherals/drivers"
     REQUIRES
@@ -15,7 +21,13 @@ idf_component_register(
         nvs_flash
         wpa_supplicant
         led_strip
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "core"
+                 "wifi"
+                 "mqtt"
+                 "app"
+                 "net"
+                 "sensor"
+                 "token"
                  "peripherals"
                  "peripherals/drivers"
 )

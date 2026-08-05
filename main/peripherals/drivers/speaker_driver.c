@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "main.h"
+#include "common.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
 #include "ledc_pool.h"

@@ -1,10 +1,12 @@
-#include "task.h"
+#include "app.h"
 #include "network.h"
 #include "periph.h"
 #include "ledc_pool.h"
+#include "mqtt_app.h"
 
 #include "driver/gpio.h"
 #include "cJSON.h"
+#include "sensor.h"
 
 static int constrain_int(int val, int min, int max)
 {
@@ -16,11 +18,12 @@ static int constrain_int(int val, int min, int max)
 }
 
 /* --------------------------------------------------------------------------
- * httpUploadTask — FreeRTOS task: periodically POST sensor data on Core 0.
+ * sensorReportTask — FreeRTOS task: periodically publish sensor data
+ * via MQTT on Core 0.
  * -------------------------------------------------------------------------- */
-void httpUploadTask(void *pvParameters)
+void sensorReportTask(void *pvParameters)
 {
-    DEBUG_PRINT("[Core %d] HTTP upload task started\n",
+    DEBUG_PRINT("[Core %d] Sensor report task started\n",
                 (int)xPortGetCoreID());
 
     for (;;)
@@ -28,39 +31,10 @@ void httpUploadTask(void *pvParameters)
         EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
         if (bits & WIFI_CONNECTED_BIT)
         {
-            if (!sendSensorData())
-                DEBUG_PRINTLN("[Core 0] HTTP upload failed");
+            if (!sensor_publish_data())
+                DEBUG_PRINTLN("[Core 0] Sensor MQTT publish failed");
         }
         vTaskDelay(pdMS_TO_TICKS(SEND_INTERVAL));
-    }
-}
-
-/* --------------------------------------------------------------------------
- * mqtt_publish_response — helper to publish a JSON response via MQTT.
- * -------------------------------------------------------------------------- */
-static void mqtt_publish_response(const char *jsonStr)
-{
-    /* Snapshot the shared handle to avoid use-after-free if the main
-     * task destroys the MQTT client concurrently (TOCTOU). */
-    esp_mqtt_client_handle_t client = g_mqttClient;
-
-    if (!g_isMQTTConnected || client == NULL)
-    {
-        DEBUG_PRINT("MQTT disconnected, response dropped: %s\n", jsonStr);
-        return;
-    }
-
-    int msg_id = esp_mqtt_client_publish(client,
-                                         MQTT_TOPIC_RESP,
-                                         jsonStr, strlen(jsonStr),
-                                         0, 0);
-    if (msg_id < 0)
-    {
-        DEBUG_PRINTLN("MQTT publish failed");
-    }
-    else
-    {
-        DEBUG_PRINT("Response sent [msg_id=%d]: %s\n", msg_id, jsonStr);
     }
 }
 
@@ -145,7 +119,33 @@ void cmdProcessTask(void *pvParameters)
             continue;
         }
 
-        cJSON *id = cJSON_GetObjectItem(root, "id");
+        /* Protocol format (strict):
+         *   {"deviceId":"90431b","type":"register","payload":{...}}
+         *                              "type":"control"
+         * type "register" — device registration actions (config/unconfig)
+         * type "control"  — device control / legacy GPIO commands
+         * deviceId is mandatory and must match this device. */
+        cJSON *deviceId = cJSON_GetObjectItem(root, "deviceId");
+        cJSON *type = cJSON_GetObjectItem(root, "type");
+        bool is_register = cJSON_IsString(type) &&
+                           strcmp(type->valuestring, "register") == 0;
+        bool is_control = cJSON_IsString(type) &&
+                          strcmp(type->valuestring, "control") == 0;
+        if (!cJSON_IsString(deviceId) ||
+            strcmp(deviceId->valuestring, DEVICE_ID) != 0 ||
+            (!is_register && !is_control))
+        {
+            DEBUG_PRINTLN("Invalid command envelope (deviceId=%s, type=%s)",
+                          cJSON_IsString(deviceId)
+                              ? deviceId->valuestring
+                              : "(null)",
+                          cJSON_IsString(type)
+                              ? type->valuestring
+                              : "(null)");
+            cJSON_Delete(root);
+            continue;
+        }
+
         cJSON *pl = cJSON_GetObjectItem(root, "payload");
         bool executed = false;
 
@@ -159,14 +159,29 @@ void cmdProcessTask(void *pvParameters)
             {
                 const char *action = action_json->valuestring;
 
-                if (strcmp(action, "config") == 0 ||
-                    strcmp(action, "unconfig") == 0 ||
-                    periph_device_find(action) != NULL)
+                if (is_register)
                 {
+                    /* Registration type: only config / unconfig. */
+                    if (strcmp(action, "config") == 0 ||
+                        strcmp(action, "unconfig") == 0)
+                    {
+                        executed = periph_dispatch(pl);
+                    }
+                    else
+                    {
+                        DEBUG_PRINT("Register command with invalid "
+                                    "action: %s\n",
+                                    action);
+                    }
+                }
+                else if (periph_device_find(action) != NULL)
+                {
+                    /* Control type: route to a registered device. */
                     executed = periph_dispatch(pl);
                 }
                 else if (gpio_json != NULL && cJSON_IsString(gpio_json))
                 {
+                    /* Legacy GPIO actions (on/off/toggle/pwm). */
                     executed = handle_gpio_action(atoi(gpio_json->valuestring),
                                                   action, value_json);
                 }
@@ -181,8 +196,6 @@ void cmdProcessTask(void *pvParameters)
         /* Build response */
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddStringToObject(resp, "type", "response");
-        if (id != NULL)
-            cJSON_AddItemToObject(resp, "id", cJSON_Duplicate(id, 1));
         cJSON_AddStringToObject(resp, "status",
                                 executed ? "ok" : "skipped");
 

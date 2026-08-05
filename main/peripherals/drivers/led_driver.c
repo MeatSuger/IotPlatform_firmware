@@ -3,12 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "main.h"
+#include "common.h"
 #include "cJSON.h"
+#include "led_strip.h"
 
 #if PERIPH_LED_ENABLE
-
-#include "led_strip.h"
 
 /* Driver-private data (dev->drvdata). */
 typedef struct
@@ -103,24 +102,12 @@ static bool led_command(periph_device_t *dev, const cJSON *pl)
     uint32_t blue = (uint32_t)(b->valueint < 0 ? 0 :
                                (b->valueint > 255 ? 255 : b->valueint));
 
-    cJSON *index = cJSON_GetObjectItem(value, "index");
-    if (cJSON_IsNumber(index))
+    /* Single RGB LED on this board: set every LED in the strip. */
+    for (int i = 0; i < ld->count; i++)
     {
-        int idx = index->valueint;
-        if (idx < 0 || idx >= ld->count)
-            return false;
-        if (led_strip_set_pixel(ld->strip, (uint32_t)idx,
+        if (led_strip_set_pixel(ld->strip, (uint32_t)i,
                                 red, green, blue) != ESP_OK)
             return false;
-    }
-    else
-    {
-        for (int i = 0; i < ld->count; i++)
-        {
-            if (led_strip_set_pixel(ld->strip, (uint32_t)i,
-                                    red, green, blue) != ESP_OK)
-                return false;
-        }
     }
 
     return led_strip_refresh(ld->strip) == ESP_OK;

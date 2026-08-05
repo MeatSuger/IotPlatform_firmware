@@ -1,6 +1,6 @@
 #include "ledc_pool.h"
 
-#include "main.h"
+#include "common.h"
 
 /* --------------------------------------------------------------------------
  * Timer 0: 5000 Hz / 13 bit — legacy analogWrite (PWM) replacement.

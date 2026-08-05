@@ -1,7 +1,7 @@
 #ifndef _NETWORK_H_
 #define _NETWORK_H_
 
-#include "main.h"
+#include "common.h"
 
 bool connectToWiFi(void);   /* kept for compatibility; wifi init is in main.c */
 bool authbydeviceid(void);
