@@ -3,6 +3,7 @@
 #include "network.h"
 #include "sensor.h"
 #include "task.h"
+#include "periph.h"
 #include "esp_wpa.h" /* esp_supplicant_disable_pmk_caching */
 #include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
 
@@ -308,6 +309,10 @@ void app_main(void)
     {
         DEBUG_PRINTLN("Temperature sensor init failed, continuing anyway...");
     }
+
+    /* --- Peripheral bus: register drivers, restore persisted devices --- */
+    periph_bus_init();
+    periph_devices_load();
 
     /* --- Command queue --- */
     g_commandQueue = xQueueCreate(10, sizeof(CommandMsg));

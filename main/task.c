@@ -1,101 +1,10 @@
 #include "task.h"
 #include "network.h"
+#include "periph.h"
+#include "ledc_pool.h"
 
 #include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "cJSON.h"
-
-/* --------------------------------------------------------------------------
- * LEDC configuration for analogWrite (PWM) replacement.
- *
- * The original code uses analogWrite(pin, duty) with duty in [0, 255].
- * ESP32 has no true DAC on most pins; analogWrite is backed by LEDC PWM.
- *
- * We allocate LEDC channels on-the-fly per GPIO pin, mimicking Arduino.
- * -------------------------------------------------------------------------- */
-#define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LEDC_RESOLUTION LEDC_TIMER_13_BIT
-#define LEDC_FREQ_HZ 5000
-
-typedef struct
-{
-    int gpio;
-    ledc_channel_t channel;
-    bool in_use;
-} ledc_slot_t;
-
-static ledc_slot_t ledc_slots[8];
-static bool ledc_initialized = false;
-
-static void ledc_init(void)
-{
-    if (ledc_initialized)
-        return;
-
-    for (int i = 0; i < 8; i++)
-    {
-        ledc_slots[i].gpio = -1;
-        ledc_slots[i].channel = i;
-        ledc_slots[i].in_use = false;
-    }
-
-    ledc_timer_config_t timer_cfg = {
-        .speed_mode = LEDC_MODE,
-        .duty_resolution = LEDC_RESOLUTION,
-        .timer_num = LEDC_TIMER_0,
-        .freq_hz = LEDC_FREQ_HZ,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
-    ledc_initialized = true;
-}
-
-static ledc_channel_t ledc_acquire_channel(int gpio)
-{
-    ledc_init();
-
-    for (int i = 0; i < 8; i++)
-    {
-        if (ledc_slots[i].in_use && ledc_slots[i].gpio == gpio)
-            return ledc_slots[i].channel;
-    }
-
-    for (int i = 0; i < 8; i++)
-    {
-        if (!ledc_slots[i].in_use)
-        {
-            ledc_slots[i].gpio = gpio;
-            ledc_slots[i].in_use = true;
-
-            ledc_channel_config_t ch_cfg = {
-                .gpio_num = gpio,
-                .speed_mode = LEDC_MODE,
-                .channel = ledc_slots[i].channel,
-                .timer_sel = LEDC_TIMER_0,
-                .duty = 0,
-                .hpoint = 0,
-            };
-            ESP_ERROR_CHECK(ledc_channel_config(&ch_cfg));
-            return ledc_slots[i].channel;
-        }
-    }
-
-    DEBUG_PRINTLN("WARNING: all LEDC channels in use, reusing ch0");
-    return LEDC_CHANNEL_0;
-}
-
-static void analog_write(int pin, int duty)
-{
-    if (duty < 0)
-        duty = 0;
-    if (duty > 255)
-        duty = 255;
-
-    ledc_channel_t ch = ledc_acquire_channel(pin);
-    uint32_t scaled = (uint32_t)duty * 8191 / 255;
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, ch, scaled));
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, ch));
-}
 
 static int constrain_int(int val, int min, int max)
 {
@@ -156,13 +65,61 @@ static void mqtt_publish_response(const char *jsonStr)
 }
 
 /* --------------------------------------------------------------------------
+ * handle_gpio_action — legacy GPIO actions (on/off/toggle/pwm) for
+ * backwards compatibility with the pre-peripheral-bus command protocol.
+ * New peripherals (led/servo/speaker/...) are handled via periph_dispatch.
+ * -------------------------------------------------------------------------- */
+static bool handle_gpio_action(int pin, const char *action,
+                               cJSON *value_json)
+{
+    /* 对于 on/off/toggle，先复位为 GPIO 模式（清除复用功能） */
+    if (strcmp(action, "on") == 0 || strcmp(action, "off") == 0 ||
+        strcmp(action, "toggle") == 0)
+    {
+        gpio_reset_pin(pin);
+        gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
+    }
+
+    if (strcmp(action, "on") == 0)
+    {
+        gpio_set_level(pin, 1);
+        return true;
+    }
+    if (strcmp(action, "off") == 0)
+    {
+        gpio_set_level(pin, 0);
+        return true;
+    }
+    if (strcmp(action, "toggle") == 0)
+    {
+        int cur = gpio_get_level(pin);
+        DEBUG_PRINT("Toggling GPIO %d: current level=%d\n", pin, cur);
+        gpio_set_level(pin, !cur);
+        return true;
+    }
+    if (strcmp(action, "pwm") == 0)
+    {
+        if (value_json != NULL && cJSON_IsNumber(value_json))
+        {
+            int raw = constrain_int(value_json->valueint, 0, 100);
+            int duty = (raw * 255 + 50) / 100;
+            return ledc_pool_set_duty_pct(pin, duty);
+        }
+        return false;
+    }
+
+    DEBUG_PRINT("Unknown action: %s\n", action);
+    return false;
+}
+
+/* --------------------------------------------------------------------------
  * cmdProcessTask — Dequeue, execute, and respond to commands on Core 1.
  *
- * Supported payload.action values:
- *   "on"     — gpio_set_level(pin, 1)
- *   "off"    — gpio_set_level(pin, 0)
- *   "toggle" — gpio_set_level(pin, !gpio_get_level(pin))
- *   "pwm"    — analog_write(pin, duty), value range 0–100
+ * Command routing:
+ *   1. Bus-level actions and registered devices go to the peripheral bus
+ *      (periph_dispatch): "config", "unconfig", or any action matching a
+ *      configured device name (e.g. "led", "servo", "speaker").
+ *   2. Legacy GPIO actions ("on"/"off"/"toggle"/"pwm" + "GPIO" field).
  *
  * Publishes a JSON response via MQTT after each command.
  * -------------------------------------------------------------------------- */
@@ -198,51 +155,25 @@ void cmdProcessTask(void *pvParameters)
             cJSON *action_json = cJSON_GetObjectItem(pl, "action");
             cJSON *value_json = cJSON_GetObjectItem(pl, "value");
 
-            if (gpio_json != NULL && cJSON_IsString(gpio_json) &&
-                action_json != NULL && cJSON_IsString(action_json))
+            if (action_json != NULL && cJSON_IsString(action_json))
             {
-
-                int pin = atoi(gpio_json->valuestring);
                 const char *action = action_json->valuestring;
 
-                // 对于 on/off/toggle，先复位为 GPIO 模式
-                if (strcmp(action, "on") == 0 || strcmp(action, "off") == 0 || strcmp(action, "toggle") == 0)
+                if (strcmp(action, "config") == 0 ||
+                    strcmp(action, "unconfig") == 0 ||
+                    periph_device_find(action) != NULL)
                 {
-                    gpio_reset_pin(pin); // 清除复用功能
-                    gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
+                    executed = periph_dispatch(pl);
                 }
-
-                if (strcmp(action, "on") == 0)
+                else if (gpio_json != NULL && cJSON_IsString(gpio_json))
                 {
-                    gpio_set_level(pin, 1);
-                    executed = true;
-                }
-                else if (strcmp(action, "off") == 0)
-                {
-                    gpio_set_level(pin, 0);
-                    executed = true;
-                }
-                else if (strcmp(action, "toggle") == 0)
-                {
-                    int cur = gpio_get_level(pin);
-                    DEBUG_PRINT("Toggling GPIO %d: current level=%d\n", pin, cur);
-                    gpio_set_level(pin, !cur);
-                    executed = true;
-                }
-                else if (strcmp(action, "pwm") == 0)
-                {
-                    if (value_json != NULL && cJSON_IsNumber(value_json))
-                    {
-                        int raw = value_json->valueint;
-                        raw = constrain_int(raw, 0, 100);
-                        int duty = (raw * 255 + 50) / 100;
-                        analog_write(pin, duty);
-                        executed = true;
-                    }
+                    executed = handle_gpio_action(atoi(gpio_json->valuestring),
+                                                  action, value_json);
                 }
                 else
                 {
-                    DEBUG_PRINT("Unknown action: %s\n", action);
+                    DEBUG_PRINT("Unknown action or missing GPIO field: %s\n",
+                                action);
                 }
             }
         }

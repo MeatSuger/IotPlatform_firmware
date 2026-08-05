@@ -1,9 +1,7 @@
 idf_component_register(
-    SRCS "main.c"
-         "network.c"
-         "sensor.c"
-         "task.c"
-         "token.c"
+    SRC_DIRS "."
+             "peripherals"
+             "peripherals/drivers"
     REQUIRES
         driver
         esp_driver_gpio
@@ -16,5 +14,8 @@ idf_component_register(
         esp_wifi
         nvs_flash
         wpa_supplicant
+        led_strip
     INCLUDE_DIRS "."
+                 "peripherals"
+                 "peripherals/drivers"
 )

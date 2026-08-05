@@ -1,0 +1,11 @@
+# ESP-IDF partition table — 16 MB flash layout (ESP32-S3-WROOM-1-N16R8).
+#
+# factory: 4 MB app partition @ 0x10000 (firmware is ~1 MB, plenty of
+# room for more peripherals). 0x10000..0x410000.
+# 0x410000..0x1000000 (~11.7 MB) is unallocated: extend factory or add
+# ota_0/ota_1/storage partitions here later (align to 0x10000).
+
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x400000,

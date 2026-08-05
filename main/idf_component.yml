@@ -6,3 +6,4 @@ dependencies:
   ## MQTT client
   espressif/mqtt: '*'
   espressif/cjson: '*'
+  espressif/led_strip: '*'

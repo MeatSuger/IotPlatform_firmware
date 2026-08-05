@@ -9,3 +9,9 @@ CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="certs/globalsign-root-ca-r1.pem"
 # GTS (Google Trust Services) 根证书及服务器链使用 P-384 曲线，必须启用
 CONFIG_MBEDTLS_ECP_DP_SECP384R1_ENABLED=y
+
+# --- Partition table: custom layout (see partitions.csv) ---
+# ESP32-S3-WROOM-1-N16R8: 16 MB flash. factory = 4 MB app partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
