@@ -9,14 +9,14 @@
 #define DEVICE_ID         "90431b"
 
 /* WiFi credentials */
-#define WIFI_SSID         "C9-1101"
-#define WIFI_PASS         "printf%d1"
+#define WIFI_SSID         "AHNU-Student"
+#define WIFI_PASS         ""
 
-/* Server API endpoints (HTTP) */
+/* Server API endpoints (HTTP) — 资源导向路径（GET/POST），见 back/api/swagger/API.md */
 #define API_HOST          "api.meatsuger.top"
-#define DATA_URL          "https://" API_HOST "/api/data/" DEVICE_ID "/Data"
-#define DATA_PULL_URL     "https://" API_HOST "/api/device/" DEVICE_ID "/cmd"
-#define TOKEN_URL         "https://" API_HOST "/api/device/" DEVICE_ID "/login"
+#define DATA_URL          "https://" API_HOST "/api/devices/" DEVICE_ID "/sensorData"
+#define DATA_PULL_URL     "https://" API_HOST "/api/devices/" DEVICE_ID "/commands"
+#define TOKEN_URL         "https://" API_HOST "/api/devices/" DEVICE_ID "/token"
 
 /* MQTT broker (WSS) — split address fields instead of a full URI */
 #define MQTT_BROKER_PATH      "/api/ws/mqtt/broker"
