@@ -6,6 +6,7 @@
 #include "common.h"
 #include "token.h"
 #include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
+#include "token.h"
 
 /* --------------------------------------------------------------------------
  * mqtt_event_handler — callback for esp_mqtt_client events
@@ -96,6 +97,9 @@ esp_mqtt_client_handle_t mqtt_app_create(void)
         },
         .credentials = {
             .username = DEVICE_ID,
+            .authentication = {
+                .password = token_load(), /* will be set later if token is available */
+            }
         },
     };
 

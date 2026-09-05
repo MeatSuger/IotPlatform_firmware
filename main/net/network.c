@@ -91,10 +91,7 @@ static void make_http_config(esp_http_client_config_t *cfg,
  * -------------------------------------------------------------------------- */
 bool authbydeviceid(void)
 {
-    if (token_load() != NULL) {
-        DEBUG_PRINTLN("Already authenticated, skipping login");
-        return true;
-    }
+
     DEBUG_PRINTLN("Starting user authentication...");
 
     /* Allocate everything on heap — main task stack is only 3584 bytes */
@@ -127,38 +124,35 @@ bool authbydeviceid(void)
     if (httpCode == 200) {
         DEBUG_PRINTLN("Login request successful");
 
-        /* Try Set-Cookie header first (captured by event handler) */
-        DEBUG_PRINT("Set-Cookie: %s\n", rbuf->set_cookie);
+        char *new_token = NULL;
 
+        /* 先尝试从 Set-Cookie 提取 */
         if (strlen(rbuf->set_cookie) > 0) {
-            char *token = extractTokenFromHeader(rbuf->set_cookie);
-            if (token != NULL) {
-                token_save(token);
-                free(token);
-                DEBUG_PRINTLN("Token from header");
-                authSuccess = true;
-            }
+            new_token = extractTokenFromHeader(rbuf->set_cookie);
         }
 
-        /* Fall back to JSON body (captured by event handler) */
-        if (!authSuccess) {
-            DEBUG_PRINT("Response body: %s\n", rbuf->data);
-            if (rbuf->len > 0) {
-                char *token = extractTokenFromBody(rbuf->data);
-                if (token != NULL) {
-                    token_save(token);
-                    free(token);
-                    DEBUG_PRINTLN("Token from body");
-                    authSuccess = true;
-                }
-            }
+        /* 如果未提取到，尝试从 JSON body 提取 */
+        if (new_token == NULL && rbuf->len > 0) {
+            new_token = extractTokenFromBody(rbuf->data);
         }
-    } else {
-        DEBUG_PRINT("Login failed, HTTP code: %d\n", httpCode);
-        if (httpCode < 0) {
-            char err_buf[64];
-            esp_err_to_name_r(err, err_buf, sizeof(err_buf));
-            DEBUG_PRINT("Error: %s\n", err_buf);
+
+        if (new_token != NULL) {
+            /* 加载旧 token（可能为 NULL） */
+            char *old_token = token_load();
+
+            if (old_token != NULL && strcmp(old_token, new_token) == 0) {
+                DEBUG_PRINTLN("Token unchanged, skip saving");
+            } else {
+                token_save(new_token);
+                DEBUG_PRINTLN("Token updated (new token differs from old or old was NULL)");
+            }
+
+            free(old_token);   // token_load 返回的是 malloc 的副本
+            free(new_token);
+            authSuccess = true;
+        } else {
+            DEBUG_PRINTLN("Failed to extract token from response");
+            authSuccess = false;
         }
     }
 

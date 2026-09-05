@@ -9,8 +9,8 @@
 #define DEVICE_ID         "90431b"
 
 /* WiFi credentials */
-#define WIFI_SSID         "AHNU-Student"
-#define WIFI_PASS         ""
+#define WIFI_SSID         "yu"
+#define WIFI_PASS         "56nauhcd"
 
 /* Server API endpoints (HTTP) — 资源导向路径（GET/POST），见 back/api/swagger/API.md */
 #define API_HOST          "api.meatsuger.top"
