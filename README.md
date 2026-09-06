@@ -21,26 +21,33 @@ ESP32-S3 设备固件，基于 ESP-IDF 构建，支持 WiFi 联网、MQTT 双向
 - LED 状态指示
 - OTA / Token 管理
 
-## 模块结构
+## 模块结构（ESP-IDF 组件化布局，见 https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/api-guides/build-system.html ）
 
 ```
 firmware/
-├── main/
-│   ├── app/             # 应用主逻辑
-│   ├── wifi/            # WiFi 连接管理
-│   ├── mqtt/            # MQTT 客户端（发布/订阅/下行命令）
-│   ├── sensor/          # 传感器驱动与采集
-│   ├── net/             # HTTP 网络请求（设备注册、Token 获取）
-│   ├── token/           # Token 存储与认证
-│   ├── core/            # 核心任务调度
-│   └── peripherals/     # 外设驱动（LED 等）
-├── CMakeLists.txt       # 顶层 CMake（ESP-IDF 项目）
-├── dependencies.lock    # IDF 组件版本锁定
-├── partitions.csv       # 分区表
-├── sdkconfig.defaults   # SDK 默认配置
-├── certs/               # TLS 证书
-└── docs/                # 文档
+├── CMakeLists.txt              # 顶层 CMake（ESP-IDF 项目）
+├── main/                       # 应用入口组件（仅 app_main 装配与全局状态）
+│   ├── CMakeLists.txt
+│   ├── idf_component.yml       # 第三方依赖清单（espressif/mqtt·cjson·led_strip）
+│   └── app_main.c
+├── components/                 # 业务组件（每组件 = 独立 CMakeLists + include/ 公共头 + src/ 实现）
+│   ├── core/                   # 共享基础设施（common.h 调试宏/全局声明 + config.h 常量，纯头组件）
+│   ├── wifi/                   # WiFi 连接管理
+│   ├── net/                    # 平台接入层（HTTP:Token 获取/命令兑底/信封解析 + Token NVS 存取）
+│   ├── mqtt_app/               # MQTT 客户端（WSS 连接/订阅下行/遥测发布）+ 认证拒绝检测
+│   ├── appcfg/                 # 配置快照状态机（NVS 持久化/version 幂等/回执/重启重放）
+│   ├── periph/                 # 声明式外设总线（device/driver 模型）：按执行器定义
+│   │                           #   config.transport(gpio/pwm/spi/led_strip) 实例化，引脚仲裁
+│   └── app/                    # 应用运行时（周期上报/命令分发任务 + 传感器按 type 采集器上报）
+├── managed_components/         # 第三方组件（component manager 自动拉取，勿手改）
+├── dependencies.lock           # 组件版本锁定
+├── partitions.csv              # 分区表
+├── sdkconfig.defaults          # SDK 默认配置
+└── docs/                       # 协议文档
 ```
+
+> 组件依赖通过各组件 CMakeLists.txt 的 `REQUIRES` 显式声明（`espressif__*` 为
+> managed 组件全名）；组件公共头放 `include/`，实现与私有头放 `src/`。
 
 ## 快速开始
 

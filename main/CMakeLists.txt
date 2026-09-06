@@ -1,33 +1,15 @@
+# main 组件：应用入口（app_main）与全局装配。
+# 业务模块已按 ESP-IDF 推荐结构拆分为独立组件（components/ 下），
+# 每个组件自带 CMakeLists.txt（源文件 + 公共头 + REQUIRES 依赖声明）。
 idf_component_register(
-    SRC_DIRS "core"
-             "wifi"
-             "mqtt"
-             "app"
-             "net"
-             "sensor"
-             "token"
-             "peripherals"
-             "peripherals/drivers"
+    SRCS "app_main.c"
+    INCLUDE_DIRS "."
     REQUIRES
-        driver
-        esp_driver_gpio
-        esp_driver_ledc
-        esp_driver_tsens
-        esp_http_client
-        esp_netif
-        esp-tls
-        esp_event
-        esp_wifi
-        nvs_flash
-        wpa_supplicant
-        led_strip
-    INCLUDE_DIRS "core"
-                 "wifi"
-                 "mqtt"
-                 "app"
-                 "net"
-                 "sensor"
-                 "token"
-                 "peripherals"
-                 "peripherals/drivers"
+        app
+        appcfg
+        core
+        mqtt_app
+        net
+        periph
+        wifi
 )
