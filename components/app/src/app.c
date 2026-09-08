@@ -1,49 +1,54 @@
 #include "app.h"
+#include "common.h"
 #include "periph.h"
 #include "mqtt_app.h"
 #include "appcfg.h"
 #include "sensor.h"
 
+#include <stdlib.h> /* malloc/free */
+#include "esp_log.h"
 #include "cJSON.h"
 
+static const char *TAG = "app";
+
 /* --------------------------------------------------------------------------
- * sensorReportTask — FreeRTOS task on Core 0: 周期上报传感器遥测。
+ * sensorReportTask — Core 0 周期上报传感器遥测。
  *
- * 数据源 = 云端物模型（config.sensors[] 定义，见 appcfg_payload）：
- * 按每条定义的 type 找采集器读取（读类设备），组装
- *   {"sensors":[{"name":<id>,"type":<type>,"value":...}]}
- * 发布到 iot/{id}/telemetry。无定义/全部采集失败 → 跳过本轮（仅状态切换时告警一次，
- * 避免每周期刷日志）。
+ * 数据源 = 云端物模型（config.sensors[] 定义，见 appcfg_payload），
+ * 组装 {"sensors":[...]} 发布到 iot/{id}/telemetry；无定义/全部采集失败时
+ * 跳过本轮，仅状态切换时告警一次（避免每周期刷日志）。
  * -------------------------------------------------------------------------- */
 void sensorReportTask(void *pvParameters)
 {
-    DEBUG_PRINT("[Core %d] Sensor report task started\n",
+    (void)pvParameters;
+    ESP_LOGI(TAG, "[Core %d] Sensor report task started",
                 (int)xPortGetCoreID());
 
-    bool lastReportOk = true; /* 首次无定义时打印一次 */
+    bool lastReportOk = true; /* 保证首次无定义时只打印一次 */
 
     for (;;)
     {
         EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
-        if (bits & WIFI_CONNECTED_BIT)
+        /* MQTT 未连接时跳过本轮：避免启动时序（WiFi 已连、MQTT 尚未 connected）
+         * 产生虚假的 "Sensor MQTT publish failed" 错误日志。 */
+        if ((bits & WIFI_CONNECTED_BIT) && g_isMQTTConnected)
         {
             /* 配置回执兜底：应用成功但回执未发出时周期性补发 */
             if (appcfg_report_pending())
                 appcfg_flush_pending_report();
 
-            /* 按云端传感器定义采集上报（物模型为准） */
             const char *cfg = appcfg_payload();
             char *report = (cfg != NULL) ? sensor_build_report(cfg) : NULL;
             if (report != NULL)
             {
                 if (!mqtt_publish(MQTT_TOPIC_DATA, report, strlen(report)))
-                    DEBUG_PRINTLN("[Core 0] Sensor MQTT publish failed");
+                    ESP_LOGE(TAG, "[Core 0] Sensor MQTT publish failed");
                 free(report);
                 lastReportOk = true;
             }
             else if (lastReportOk)
             {
-                DEBUG_PRINTLN("[Core 0] 无可用传感器定义/采集失败，等待云端配置 sensors 后开始上报");
+                ESP_LOGI(TAG, "[Core 0] 无可用传感器定义/采集失败，等待云端配置 sensors 后开始上报");
                 lastReportOk = false;
             }
         }
@@ -52,17 +57,18 @@ void sensorReportTask(void *pvParameters)
 }
 
 /* --------------------------------------------------------------------------
- * cmdProcessTask — FreeRTOS task on Core 1: 出队并分发后端消息。
+ * cmdProcessTask — Core 1 出队并分发后端消息。
  *
  * 执行器定义唯一真源为云端配置快照（appcfg → periph_apply_config）；
- * 设备类型（transport: gpio/pwm/spi/...）由定义 config.transport 决定，
- * 命令 value 为传输原语（云端负责角度/颜色等语义换算）。本任务只做分发：
- *   1. 配置快照（version+config）→ appcfg_handle_config（幂等/持久化/回执）
- *   2. 控制命令（action = 执行器 id → periph_dispatch）
+ * 设备类型（transport）由定义 config.transport 决定，命令 value 为传输原语
+ * （云端负责角度/颜色等语义换算）。本任务只做分发：
+ *   1. 配置快照（version+config）→ appcfg_handle_config
+ *   2. 控制命令（action = 执行器 id）→ periph_dispatch
  * -------------------------------------------------------------------------- */
 void cmdProcessTask(void *pvParameters)
 {
-    DEBUG_PRINT("[Core %d] Command processing task started\n",
+    (void)pvParameters;
+    ESP_LOGI(TAG, "[Core %d] Command processing task started",
                 (int)xPortGetCoreID());
     CommandMsg cmdMsg;
 
@@ -77,7 +83,7 @@ void cmdProcessTask(void *pvParameters)
 
         if (root == NULL)
         {
-            DEBUG_PRINTLN("[cmd] 消息 JSON 解析失败，丢弃");
+            ESP_LOGE(TAG, "[cmd] 消息 JSON 解析失败，丢弃");
             continue;
         }
 
@@ -87,9 +93,7 @@ void cmdProcessTask(void *pvParameters)
          *        {"version":N,"config":{...}}
          *   B. 后端下行命令（MQTT iot/{id}/cmd 实时 / HTTP GET /commands 兜底）:
          *        {"id":N,"type":"config"|"control","payload":{...},"createdAt":...}
-         * A/B 均解出“内容子对象”后分发（version+config → 配置状态机；
-         * action → 执行器 transport 路由），命令无应答（控制为 fire-and-forget，
-         * 最终状态经遥测上报体现）。 */
+         * 解出“内容子对象”后分发（version+config → 配置状态机；action → 执行器路由）。 */
         cJSON *sub = root;
         cJSON *envPayload = cJSON_GetObjectItem(root, "payload");
         if (envPayload != NULL && cJSON_IsObject(envPayload))
@@ -109,12 +113,12 @@ void cmdProcessTask(void *pvParameters)
         if (cJSON_IsString(actionItem))
         {
             if (!periph_dispatch(sub))
-                DEBUG_PRINT("[cmd] 控制命令未执行: action=%s\n",
+                ESP_LOGW(TAG, "[cmd] 控制命令未执行: action=%s",
                             actionItem->valuestring);
         }
         else
         {
-            DEBUG_PRINTLN("[cmd] 未知消息信封，忽略");
+            ESP_LOGW(TAG, "[cmd] 未知消息信封，忽略");
         }
 
         cJSON_Delete(root);

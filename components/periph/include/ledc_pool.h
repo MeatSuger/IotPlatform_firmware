@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "driver/ledc.h"
 
 /* --------------------------------------------------------------------------
  * LEDC channel/timer pool — generic PWM resource manager.

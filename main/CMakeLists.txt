@@ -8,6 +8,7 @@ idf_component_register(
         app
         appcfg
         core
+        esp_pm
         mqtt_app
         net
         periph

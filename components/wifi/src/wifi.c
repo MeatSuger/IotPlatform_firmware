@@ -1,7 +1,13 @@
 #include "wifi.h"
 
 #include "common.h"
+#include "esp_wifi.h" /* WIFI_EVENT / esp_wifi_* */
+#include "esp_event.h" /* esp_event_handler_instance_* */
+#include "esp_netif.h" /* esp_netif_t */
 #include "esp_wpa.h" /* esp_supplicant_disable_pmk_caching */
+#include "esp_log.h"
+
+static const char *TAG = "wifi";
 
 /* --------------------------------------------------------------------------
  * WiFi event handler — signals the event group when connected / disconnected
@@ -9,6 +15,7 @@
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
+    (void)arg;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
         esp_wifi_connect();
@@ -16,18 +23,25 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     else if (event_base == WIFI_EVENT &&
              event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        DEBUG_PRINTLN("WiFi disconnected");
+        ESP_LOGW(TAG, "WiFi disconnected");
         if (g_wifiEventGroup != NULL)
+        {
             xEventGroupClearBits(g_wifiEventGroup, WIFI_CONNECTED_BIT);
+            /* 置位供主循环阻塞唤醒（esp_wifi_connect 自动重连在下面发起） */
+            xEventGroupSetBits(g_wifiEventGroup, WIFI_DISCONNECTED_BIT);
+        }
         esp_wifi_connect();
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        DEBUG_PRINTLN("WiFi connected, IP: " IPSTR,
+        ESP_LOGI(TAG, "WiFi connected, IP: " IPSTR,
                       IP2STR(&event->ip_info.ip));
         if (g_wifiEventGroup != NULL)
+        {
+            xEventGroupClearBits(g_wifiEventGroup, WIFI_DISCONNECTED_BIT);
             xEventGroupSetBits(g_wifiEventGroup, WIFI_CONNECTED_BIT);
+        }
     }
 }
 
@@ -62,7 +76,7 @@ bool wifi_init_sta(void)
     g_wifiEventGroup = xEventGroupCreate();
     if (g_wifiEventGroup == NULL)
     {
-        DEBUG_PRINTLN("Failed to create WiFi event group");
+        ESP_LOGE(TAG, "Failed to create WiFi event group");
         return false;
     }
 
@@ -70,29 +84,36 @@ bool wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
     /* Disable PMK caching BEFORE starting WiFi to avoid known IDF 6.0
-     * PMKSA NULL-deref crash (espressif/esp-idf#15584, commit 437fa9a) */
+     * PMKSA NULL-deref crash (espressif/esp-idf#15584) */
     esp_supplicant_disable_pmk_caching(true);
 
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Disable power save to avoid EAPOL rekey crash (IDF 6.0 bug) */
-    esp_wifi_set_ps(WIFI_PS_NONE);
+#if PWR_SAVE_ENABLE
+    /* modem-sleep：射频按 DTIM 醒来收 AP 缓存的单播，命令平均 ~50ms 到达（最坏≈一个
+     * beacon 周期）。CPU light sleep 的射频协同依赖本项。
+     * 历史：IDF 6.0 曾因 EAPOL rekey crash 设过 PS_NONE；现为 6.2 且 PMK caching
+     * 已禁用（见上），量产前仍需 ~48h WPA2 重密钥 soak 验证 */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#else
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#endif
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(WIFI_MAX_TX_POWER_Q4));
 
-    DEBUG_PRINTLN("Connecting to Wi-Fi: %s", WIFI_SSID);
+    ESP_LOGI(TAG, "Connecting to Wi-Fi: %s", WIFI_SSID);
 
-    /* Block until connected or 15 s timeout */
     EventBits_t bits = xEventGroupWaitBits(g_wifiEventGroup,
                                            WIFI_CONNECTED_BIT,
                                            pdFALSE, pdFALSE,
                                            pdMS_TO_TICKS(15000));
     if (bits & WIFI_CONNECTED_BIT)
     {
-        DEBUG_PRINTLN("WiFi connected successfully");
+        ESP_LOGI(TAG, "WiFi connected successfully");
         return true;
     }
     else
     {
-        DEBUG_PRINTLN("WiFi connection timeout");
+        ESP_LOGE(TAG, "WiFi connection timeout");
         return false;
     }
 }

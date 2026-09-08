@@ -4,11 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "nvs_flash.h"
+#include "nvs.h"
 
 #include "common.h"
+#include "esp_log.h"
 #include "mqtt_app.h"
 #include "periph.h"
+
+static const char *TAG = "appcfg";
 
 #define NVS_NAMESPACE      "appcfg"
 #define NVS_KEY_VERSION    "version"
@@ -17,7 +20,6 @@
 
 /* 配置 payload 单条上限（NVS 整条读写，云端配置快照通常 < 1KB） */
 #define CONFIG_PAYLOAD_MAX 4095U
-
 static uint32_t s_appliedVersion = 0;
 static char *s_payload = NULL;
 static bool s_reportPending = false;
@@ -26,7 +28,6 @@ static bool s_inited = false;
 /* --------------------------------------------------------------------------
  * NVS 持久化
  * -------------------------------------------------------------------------- */
-
 static void nvs_save_pending(bool pending)
 {
     nvs_handle_t h;
@@ -46,7 +47,7 @@ void appcfg_init(void)
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK)
     {
-        DEBUG_PRINTLN("[appcfg] No saved config (namespace empty)");
+        ESP_LOGI(TAG, "[appcfg] No saved config (namespace empty)");
         return;
     }
 
@@ -75,7 +76,7 @@ void appcfg_init(void)
     nvs_close(h);
 
     if (s_appliedVersion > 0)
-        DEBUG_PRINTLN("[appcfg] Restored applied cfg version=%u payload=%uB report_pending=%d",
+        ESP_LOGI(TAG, "[appcfg] Restored applied cfg version=%u payload=%uB report_pending=%d",
                       (unsigned)s_appliedVersion,
                       s_payload != NULL ? (unsigned)strlen(s_payload) : 0,
                       s_reportPending);
@@ -101,7 +102,7 @@ static bool appcfg_persist(uint32_t version, const char *payload)
 {
     if (payload == NULL || strlen(payload) > CONFIG_PAYLOAD_MAX)
     {
-        DEBUG_PRINTLN("[appcfg] Invalid config payload (%u bytes)",
+        ESP_LOGE(TAG, "[appcfg] Invalid config payload (%u bytes)",
                       payload != NULL ? (unsigned)strlen(payload) : 0);
         return false;
     }
@@ -109,7 +110,7 @@ static bool appcfg_persist(uint32_t version, const char *payload)
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK)
     {
-        DEBUG_PRINTLN("[appcfg] nvs_open failed");
+        ESP_LOGE(TAG, "[appcfg] nvs_open failed");
         return false;
     }
 
@@ -124,7 +125,7 @@ static bool appcfg_persist(uint32_t version, const char *payload)
 
     if (err != ESP_OK)
     {
-        DEBUG_PRINTLN("[appcfg] NVS persist failed: 0x%x", err);
+        ESP_LOGE(TAG, "[appcfg] NVS persist failed: 0x%x", err);
         return false;
     }
 
@@ -145,11 +146,10 @@ void appcfg_report_sent(void)
 }
 
 /* --------------------------------------------------------------------------
- * 配置分区运行时效果应用（payload 分区语义见 appcfg.h）
- *
- * 当前硬件能力映射（其余字段不生效但随 payload 原样持久化/回执）：
- *   - sensor.reportInterval（秒）→ g_reportIntervalMs（传感器上报周期）
+ * 配置分区运行时效果应用：
+ *   - sensor.reportInterval（秒）→ g_reportIntervalMs（上报周期）
  *   - actuators[] → periph_apply_config()（执行器 diff 实例化/卸载）
+ * 其余字段不生效但随 payload 原样持久化/回执。
  * -------------------------------------------------------------------------- */
 static void apply_runtime_effects(const cJSON *config)
 {
@@ -164,7 +164,7 @@ static void apply_runtime_effects(const cJSON *config)
         ri->valuedouble <= 86400.0)
     {
         g_reportIntervalMs = (uint32_t)(ri->valuedouble * 1000.0);
-        DEBUG_PRINTLN("[appcfg] report interval -> %u ms",
+        ESP_LOGI(TAG, "[appcfg] report interval -> %u ms",
                       (unsigned)g_reportIntervalMs);
     }
 
@@ -172,9 +172,9 @@ static void apply_runtime_effects(const cJSON *config)
     if (acts != NULL && cJSON_IsArray(acts))
     {
         if (periph_apply_config(acts))
-            DEBUG_PRINTLN("[appcfg] actuators 已按期望列表收敛");
+            ESP_LOGI(TAG, "[appcfg] actuators 已按期望列表收敛");
         else
-            DEBUG_PRINTLN("[appcfg] actuators 部分条目应用失败（详见 periph 日志）");
+            ESP_LOGW(TAG, "[appcfg] actuators 部分条目应用失败（详见 periph 日志）");
     }
 }
 
@@ -187,7 +187,7 @@ static void replay_payload(void)
     cJSON *cfg = cJSON_Parse(s_payload);
     if (cfg == NULL)
     {
-        DEBUG_PRINTLN("[appcfg] 持久化 payload 解析失败，跳过重放");
+        ESP_LOGE(TAG, "[appcfg] 持久化 payload 解析失败，跳过重放");
         return;
     }
     apply_runtime_effects(cfg);
@@ -198,7 +198,7 @@ void appcfg_replay(void)
 {
     if (!s_inited)
         appcfg_init();
-    DEBUG_PRINTLN("[appcfg] replay runtime effects (version=%u)",
+    ESP_LOGI(TAG, "[appcfg] replay runtime effects (version=%u)",
                   (unsigned)s_appliedVersion);
     replay_payload();
 }
@@ -221,13 +221,13 @@ static void send_report(void)
 
     if (ok)
     {
-        DEBUG_PRINTLN("[appcfg] Config report sent (version=%u)",
+        ESP_LOGI(TAG, "[appcfg] Config report sent (version=%u)",
                       (unsigned)s_appliedVersion);
         appcfg_report_sent();
     }
     else
     {
-        DEBUG_PRINTLN("[appcfg] Config report publish failed (version=%u), will retry",
+        ESP_LOGW(TAG, "[appcfg] Config report publish failed (version=%u), will retry",
                       (unsigned)s_appliedVersion);
     }
 }
@@ -242,13 +242,13 @@ void appcfg_handle_config(uint32_t version, const cJSON *config)
 {
     if (config == NULL || !cJSON_IsObject(config))
     {
-        DEBUG_PRINTLN("[appcfg] Invalid config envelope (no config object)");
+        ESP_LOGE(TAG, "[appcfg] Invalid config envelope (no config object)");
         return;
     }
 
     if (version < s_appliedVersion)
     {
-        DEBUG_PRINTLN("[appcfg] Ignore stale config version=%u (applied=%u)",
+        ESP_LOGI(TAG, "[appcfg] Ignore stale config version=%u (applied=%u)",
                       (unsigned)version, (unsigned)s_appliedVersion);
         return;
     }
@@ -256,7 +256,7 @@ void appcfg_handle_config(uint32_t version, const cJSON *config)
     if (version == s_appliedVersion && !s_reportPending)
     {
         /* retained 重投的幂等分支：已应用且已回执，无需动作 */
-        DEBUG_PRINTLN("[appcfg] Config version=%u already applied & acked",
+        ESP_LOGI(TAG, "[appcfg] Config version=%u already applied & acked",
                       (unsigned)version);
         return;
     }
@@ -272,8 +272,8 @@ void appcfg_handle_config(uint32_t version, const cJSON *config)
             return;
         }
         free(cfgStr);
-        DEBUG_PRINTLN("[appcfg] Applied config version=%u", (unsigned)version);
-        /* 从持久化 payload 统一重放运行时效果（与开机 appcfg_replay 同路径） */
+        ESP_LOGI(TAG, "[appcfg] Applied config version=%u", (unsigned)version);
+        /* 统一从持久化 payload 重放运行时效果（与开机 appcfg_replay 同路径） */
         replay_payload();
     }
 

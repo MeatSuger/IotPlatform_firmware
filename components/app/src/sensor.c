@@ -6,12 +6,11 @@
 
 #include "cJSON.h"
 #include "esp_log.h"
-#include "sdkconfig.h"
 
 #define TAG "sensor"
 
 /* --------------------------------------------------------------------------
- * Temperature collector — ESP32 internal temperature sensor.
+ * Temperature collector — ESP32 内部温度传感器
  * -------------------------------------------------------------------------- */
 #if SOC_TEMP_SENSOR_SUPPORTED
 
@@ -33,11 +32,8 @@ static bool internal_temp_init(void)
         ESP_LOGE(TAG, "temperature_sensor_install failed: 0x%x", err);
         return false;
     }
-    err = temperature_sensor_enable(g_tempSensor);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "temperature_sensor_enable failed: 0x%x", err);
-        return false;
-    }
+    /* 不在 init 时 enable：采样时才上电（见 read_internal_temp），
+     * 两次上报之间保持 disable，省 RTC 模拟域静态功耗 */
     ESP_LOGI(TAG, "Temperature sensor ready");
     return true;
 }
@@ -47,11 +43,18 @@ static float read_internal_temp(void)
     float tsens_out = 0.0f;
     if (g_tempSensor == NULL) {
         ESP_LOGW(TAG, "Temperature sensor not initialized");
-        return 0.0f;
+        return NAN; /* 故障哨兵，与真实 0°C 读数区分 */
+    }
+    /* 占空比采样：enable → 读数 → disable（失败路径同样关闭） */
+    if (temperature_sensor_enable(g_tempSensor) != ESP_OK) {
+        ESP_LOGE(TAG, "temperature_sensor_enable failed");
+        return NAN;
     }
     esp_err_t err = temperature_sensor_get_celsius(g_tempSensor, &tsens_out);
+    temperature_sensor_disable(g_tempSensor);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "get_celsius failed: 0x%x", err);
+        return NAN; /* 故障路径不再返回 0.0f（与真实 0°C 混叠） */
     }
     return tsens_out;
 }
@@ -60,7 +63,10 @@ static float read_internal_temp(void)
 static cJSON *collect_temperature(const cJSON *def)
 {
     (void)def;
-    double val = round(read_internal_temp() * 100.0) / 100.0;
+    float raw = read_internal_temp();
+    if (isnan(raw))
+        return NULL; /* 本次采集失败：上报侧跳过该传感器 */
+    double val = round((double)raw * 100.0) / 100.0;
     return cJSON_CreateNumber(val);
 }
 
@@ -191,7 +197,7 @@ char *sensor_build_report(const char *config_json)
     if (cJSON_GetArraySize(arr) == 0)
     {
         cJSON_Delete(out);
-        return NULL; /* 无任何可用采集 */
+        return NULL;
     }
 
     char *json = cJSON_PrintUnformatted(out);

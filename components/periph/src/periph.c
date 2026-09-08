@@ -4,12 +4,15 @@
 #include <string.h>
 
 #include "common.h"
+#include "esp_log.h" /* ESP_LOGI */
 #include "cJSON.h"
 
 #include "drivers/gpio_driver.h"
 #include "drivers/pwm_driver.h"
 #include "drivers/spi_driver.h"
 #include "drivers/led_strip_driver.h"
+
+static const char *TAG = "periph";
 
 /* --------------------------------------------------------------------------
  * Driver registry (bus) + device list
@@ -29,7 +32,7 @@ bool periph_pin_claim(int gpio, const char *who)
         return false;
     if (g_pin_taken[gpio])
     {
-        DEBUG_PRINTLN("periph: pin %d already claimed (by %s), %s rejected",
+        ESP_LOGW(TAG, "periph: pin %d already claimed (by %s), %s rejected",
                       gpio, who, who);
         return false;
     }
@@ -101,7 +104,7 @@ static periph_device_t *device_create(const char *name,
 
     if (!drv->probe(dev, cfg))
     {
-        DEBUG_PRINTLN("periph: probe failed for '%s' (transport %s)",
+        ESP_LOGE(TAG, "periph: probe failed for '%s' (transport %s)",
                       name, drv->name);
         free(dev);
         return NULL;
@@ -121,7 +124,7 @@ bool periph_device_add(const char *name, const char *transport,
     const periph_driver_t *drv = driver_find(transport);
     if (drv == NULL)
     {
-        DEBUG_PRINTLN("periph: unknown transport '%s'", transport);
+        ESP_LOGE(TAG, "periph: unknown transport '%s'", transport);
         return false;
     }
 
@@ -136,11 +139,11 @@ bool periph_device_add(const char *name, const char *transport,
 
         if (!drv->probe(dev, cfg))
         {
-            DEBUG_PRINTLN("periph: re-probe failed for '%s' (transport %s)",
+            ESP_LOGE(TAG, "periph: re-probe failed for '%s' (transport %s)",
                           name, transport);
             return false;
         }
-        DEBUG_PRINTLN("periph: device '%s' reconfigured (transport %s)",
+        ESP_LOGI(TAG, "periph: device '%s' reconfigured (transport %s)",
                       name, transport);
         return true;
     }
@@ -149,7 +152,7 @@ bool periph_device_add(const char *name, const char *transport,
     if (dev == NULL)
         return false;
 
-    DEBUG_PRINTLN("periph: device '%s' added (transport %s)",
+    ESP_LOGI(TAG, "periph: device '%s' added (transport %s)",
                   name, transport);
     return true;
 }
@@ -164,25 +167,20 @@ bool periph_device_remove(const char *name)
         dev->driver->remove(dev);
 
     /* Unlink from the bus list. */
-    periph_device_t **pp = &g_devices;
-    while (*pp != dev)
+    periph_device_t **pp = &g_devices;    while (*pp != dev)
         pp = &(*pp)->next;
     *pp = dev->next;
 
     free(dev);
-    DEBUG_PRINTLN("periph: device '%s' removed", name);
+    ESP_LOGI(TAG, "periph: device '%s' removed", name);
     return true;
 }
 
 /* --------------------------------------------------------------------------
  * 期望配置 diff 应用（DeviceConfig.payload.actuators）
  *
- * 定义格式（后端 Actuator DTO；driver 为后端枚举占位，固件忽略）：
- *   {"id":"fan1","driver":"servo","enabled":true,
- *    "config":{"transport":"pwm","pin":18,"freq_hz":25000}}
- *
- * 设备类型（transport: gpio/pwm/spi/led_strip/...）由 config.transport 决定；
- * 后续新增传输只需在固件注册表加驱动，云端/后端无需改动。
+ * 设备类型（transport: gpio/pwm/spi/led_strip/...）由定义 config.transport
+ * 决定；新增传输只需在固件注册表加驱动，云端/后端无需改动。
  * -------------------------------------------------------------------------- */
 
 /* id 是否出现在期望启用列表中 */
@@ -205,7 +203,7 @@ bool periph_apply_config(const cJSON *actuators)
 {
     if (actuators == NULL || !cJSON_IsArray(actuators))
     {
-        DEBUG_PRINTLN("periph: actuators 期望列表非法（非数组），忽略");
+        ESP_LOGE(TAG, "periph: actuators 期望列表非法（非数组），忽略");
         return false;
     }
 
@@ -220,7 +218,7 @@ bool periph_apply_config(const cJSON *actuators)
         if (!cJSON_IsString(id) || strlen(id->valuestring) == 0 ||
             strlen(id->valuestring) > PERIPH_NAME_MAX - 1)
         {
-            DEBUG_PRINTLN("periph: 跳过非法执行器定义（id 缺失或超长）");
+            ESP_LOGW(TAG, "periph: 跳过非法执行器定义（id 缺失或超长）");
             all_ok = false;
             continue;
         }
@@ -233,12 +231,12 @@ bool periph_apply_config(const cJSON *actuators)
         {
             if (!periph_device_remove(name) && active)
             {
-                DEBUG_PRINTLN("periph: 执行器 '%s' 定义非法，无法实例化", name);
+                ESP_LOGE(TAG, "periph: 执行器 '%s' 定义非法，无法实例化", name);
                 all_ok = false;
             }
             else
             {
-                DEBUG_PRINTLN("periph: 执行器 '%s' 已从期望移除", name);
+                ESP_LOGI(TAG, "periph: 执行器 '%s' 已从期望移除", name);
             }
             continue;
         }
@@ -247,7 +245,7 @@ bool periph_apply_config(const cJSON *actuators)
         cJSON *transport = cJSON_GetObjectItem(cfg, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring[0] == '\0')
         {
-            DEBUG_PRINTLN("periph: 执行器 '%s' 缺少 config.transport，移除",
+            ESP_LOGW(TAG, "periph: 执行器 '%s' 缺少 config.transport，移除",
                           name);
             periph_device_remove(name);
             all_ok = false;
@@ -256,7 +254,7 @@ bool periph_apply_config(const cJSON *actuators)
 
         if (!periph_device_add(name, transport->valuestring, cfg))
         {
-            DEBUG_PRINTLN("periph: 执行器 '%s' 实例化失败（transport %s）",
+            ESP_LOGE(TAG, "periph: 执行器 '%s' 实例化失败（transport %s）",
                           name, transport->valuestring);
             all_ok = false;
         }
@@ -269,7 +267,7 @@ bool periph_apply_config(const cJSON *actuators)
         periph_device_t *next = d->next;
         if (!desired_active(d->name, actuators))
         {
-            DEBUG_PRINTLN("periph: 移除不在期望列表中的设备 '%s'",
+            ESP_LOGI(TAG, "periph: 移除不在期望列表中的设备 '%s'",
                           d->name);
             periph_device_remove(d->name);
         }
@@ -291,7 +289,6 @@ bool periph_dispatch(const cJSON *pl)
     if (!cJSON_IsString(action))
         return false;
 
-    /* action = 设备名 → 路由到其 transport 的 ops->command */
     periph_device_t *dev = periph_device_find(action->valuestring);
     if (dev == NULL || dev->driver->ops == NULL ||
         dev->driver->ops->command == NULL)
@@ -319,6 +316,6 @@ void periph_bus_init(void)
 #if PERIPH_LED_ENABLE
     periph_driver_register(&led_strip_driver);
 #endif
-    DEBUG_PRINTLN("periph: bus ready (%d transport(s) registered)",
-                  driver_count());
+    ESP_LOGI(TAG, "periph: bus ready (%d transport(s) registered)",
+             driver_count());
 }

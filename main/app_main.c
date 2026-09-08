@@ -1,4 +1,7 @@
 #include "common.h"
+#include "nvs_flash.h"
+#include "esp_wifi.h"
+#include "esp_log.h"
 #include "wifi.h"
 #include "mqtt_app.h"
 #include "app.h"
@@ -7,14 +10,16 @@
 #include "token.h"
 #include "periph.h"
 #include "appcfg.h"
+#include "esp_pm.h"
+
+static const char *TAG = "app_main";
 
 /* --------------------------------------------------------------------------
- * Global state definitions
+ * Global state
  * -------------------------------------------------------------------------- */
 esp_mqtt_client_handle_t g_mqttClient = NULL;
-bool g_isMQTTConnected = false;
-bool g_authSuccess = false;
-volatile bool g_mqttAuthRefused = false;
+volatile bool g_isMQTTConnected = false;
+volatile bool g_authSuccess = false;
 QueueHandle_t g_commandQueue = NULL;
 EventGroupHandle_t g_wifiEventGroup = NULL;
 uint32_t g_reportIntervalMs = SEND_INTERVAL;
@@ -26,7 +31,8 @@ uint32_t g_reportIntervalMs = SEND_INTERVAL;
  * -------------------------------------------------------------------------- */
 static void networkInitTask(void *pv)
 {
-    DEBUG_PRINT("[Core %d] Network init task started\n",
+    (void)pv;
+    ESP_LOGI(TAG, "[Core %d] Network init task started",
                 (int)xPortGetCoreID());
 
     g_authSuccess = authbydeviceid();
@@ -34,79 +40,106 @@ static void networkInitTask(void *pv)
         syncPendingCommands();
 
     xEventGroupSetBits(g_wifiEventGroup, NETWORK_INIT_DONE_BIT);
-    DEBUG_PRINTLN("Network init task done (auth=%s)",
+    ESP_LOGI(TAG, "Network init task done (auth=%s)",
                   g_authSuccess ? "ok" : "fail");
     vTaskDelete(NULL);
 }
 
 /* --------------------------------------------------------------------------
- * reconnectAuthTask — re-auth in a dedicated task (same watchdog reason).
+ * 异常重启退避
+ *
+ * 每次重启 = 完整 boot + WiFi 关联 + TLS 握手，是整机最耗电路径；服务器/网络
+ * 故障时若立即重启会形成密集重试（boot loop）。指数退避 5s→2min 封顶，
+ * 恢复正常后置回 5s（见主循环）。
  * -------------------------------------------------------------------------- */
-static void reconnectAuthTask(void *pv)
+static uint32_t s_restartBackoffMs = 5000U;
+static void backoff_restart(const char *why)
 {
-    DEBUG_PRINT("[Core %d] Re-auth task started\n",
-                (int)xPortGetCoreID());
-
-    token_clear();
-    g_authSuccess = authbydeviceid();
-
-    xEventGroupSetBits(g_wifiEventGroup, NETWORK_INIT_DONE_BIT);
-    DEBUG_PRINTLN("Re-auth task done (ok=%s)",
-                  g_authSuccess ? "yes" : "no");
-    vTaskDelete(NULL);
+    ESP_LOGE("main", "%s: restarting in %u s", why,
+             (unsigned)(s_restartBackoffMs / 1000U));
+    vTaskDelay(pdMS_TO_TICKS(s_restartBackoffMs));
+    s_restartBackoffMs *= 2U;
+    if (s_restartBackoffMs > 120000U)
+        s_restartBackoffMs = 120000U;
+    esp_restart();
 }
 
 /* --------------------------------------------------------------------------
- * recover_connection — 重新认证 + 离线命令兜底 + 重建 MQTT 客户端。
+ * connectionRecoveryTask — 连接恢复统一入口（全程在专用任务里跑，主任务只等待）。
  *
- * 由两条路径共用：
- *   1. WiFi 断线重连后（Token 可能已按 30 天未上线被清理）；
- *   2. MQTT broker 拒绝连接（CONNACK refused = Token 失效/被顶号，见 g_mqttAuthRefused）。
+ * 两种模式（pv != NULL = 全量重认证）：
+ *   A. 快路径（WiFi 重连后）：设备在线期间的周期上报会刷新 token，重连时
+ *      token 大概率仍有效，复用现有 token 重建客户端，省一次 5-8s TLS 握手；
+ *      若 broker 拒绝（CONNACK refused）→ 事件位再次置位 → 下轮全量恢复，自动收敛。
+ *   B. 全量重认证（token 确认失效）：清 token → DeviceIDAuth 重新取 → 重建。
  *
- * 步骤：重新获取 Token（DeviceIDAuth，专用任务避免 TLS 握手饿死 IDLE 触发看门狗）
- * → syncPendingCommands 兜底拉取离线期间下发的命令（拉取即消费）→ 用新 Token 重建客户端。
- * 认证失败：直接重启（重启后重新走完整接入流程）。
+ * 为什么整体必须离开主任务：
+ *   - mqtt_app_destroy 的 stop 在 WAIT_RECONNECT 态最长可阻塞近
+ *     reconnect_timeout/2（约 30s），只能在恢复任务自身上下文承受；
+ *   - 认证/sync 的 TLS 握手 CPU-bound 5-8s，在主任务跑会饿死 IDLE 触发 5s
+ *     task WDT panic 复位，且复位不带退避 → boot+关联+TLS 全握手密集重刷。
+ *
+ * 顺序即正确性：先毁旧客户端（置 NULL 防 use-after-free；同时掐灭失效 token
+ * 的自动重试风暴，毁/建窗口内不再产生新事件位），后 sync 兜底，最后重建/
+ * start。离线命令由 sync 拉取即消费入队，与 retained config 快照重投互不冲突。
  * -------------------------------------------------------------------------- */
-static void recover_connection(void)
+static void connectionRecoveryTask(void *pv)
 {
-    xTaskCreatePinnedToCore(reconnectAuthTask, "ReAuth", 8192,
-                            NULL, 2, NULL, 0);
-    EventBits_t rb = xEventGroupWaitBits(g_wifiEventGroup,
-                                          NETWORK_INIT_DONE_BIT,
-                                          pdFALSE, pdTRUE,
-                                          pdMS_TO_TICKS(30000));
-    if (!(rb & NETWORK_INIT_DONE_BIT) || !g_authSuccess)
-    {
-        DEBUG_PRINTLN("Re-auth failed, restarting...");
-        esp_restart();
-    }
+    const bool full_reauth = (pv != NULL);
 
-    /* 离线命令兜底：拉取并处理平台命令队列（与 MQTT 实时通道互补）。
-     * 需在重建 MQTT 前执行——retained config 快照重投与命令队列互不冲突。 */
-    syncPendingCommands();
-
-    /* Re-create MQTT client with the new token */
+    /* 1) 先毁旧客户端 */
     if (g_mqttClient)
     {
         mqtt_app_destroy(g_mqttClient);
-        g_mqttClient = NULL;  /* prevent use-after-free from other tasks */
+        g_mqttClient = NULL; /* prevent use-after-free from other tasks */
     }
+
+    /* 2) 全量模式：重新取 Token */
+    if (full_reauth)
+    {
+        token_clear();
+        g_authSuccess = authbydeviceid();
+        if (!g_authSuccess)
+            backoff_restart("Re-auth failed");
+    }
+
+    /* 3) 离线命令兜底 */
+    syncPendingCommands();
+
+    /* 4) 用当前 token 重建并启动客户端 */
     g_mqttClient = mqtt_app_create();
     if (g_mqttClient == NULL)
-    {
-        DEBUG_PRINTLN("Failed to re-create MQTT client");
-        esp_restart();
-    }
+        backoff_restart("Failed to re-create MQTT client");
     mqtt_app_start(g_mqttClient);
-    DEBUG_PRINTLN("WiFi / MQTT recovered");
+
+    xEventGroupSetBits(g_wifiEventGroup, RECOVERY_DONE_BIT);
+    ESP_LOGI(TAG, "Connection recovered (%s path)",
+                  full_reauth ? "full re-auth" : "token reuse");
+    vTaskDelete(NULL);
 }
 
-/* --------------------------------------------------------------------------
- * app_main — entry point
- * -------------------------------------------------------------------------- */
+/* 启动一次连接恢复并等待完成。栈 10240（比 NetInit 的 8192 大：本任务同时
+ * 承载 TLS 握手与 sync）；120s 上界 = 毁(≤30s)+认证(≤30s)+sync(≤15s)+重建+裕量，
+ * 超时视为卡死兜底退避重启。退避计数仅在确认恢复成功后归零。 */
+static void run_recovery(bool full_reauth)
+{
+    xEventGroupClearBits(g_wifiEventGroup, RECOVERY_DONE_BIT);
+    if (xTaskCreatePinnedToCore(connectionRecoveryTask, "Recover", 10240,
+                                full_reauth ? (void *)1 : NULL, 2, NULL, 0) != pdPASS)
+        backoff_restart("Failed to spawn recovery task");
+
+    EventBits_t rb = xEventGroupWaitBits(g_wifiEventGroup, RECOVERY_DONE_BIT,
+                                         pdTRUE, pdTRUE,
+                                         pdMS_TO_TICKS(120000));
+    if (!(rb & RECOVERY_DONE_BIT))
+        backoff_restart("Connection recovery stuck");
+
+    s_restartBackoffMs = 5000U; /* 恢复成功，退避归零 */
+}
+
 void app_main(void)
 {
-    DEBUG_PRINTLN("Device starting...");
+    ESP_LOGI(TAG, "Device starting...");
 
     /* --- NVS (required by WiFi) --- */
     esp_err_t ret = nvs_flash_init();
@@ -118,7 +151,19 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    /* 设备配置持久化状态（NVS）：版本/载荷/待回执，MQTT 事件前就绪 */
+    /* PM：DFS 160↔80 MHz（S3 上 APB 恒 80 MHz，UART/RMT 等外设时序不受降频影响；
+       TLS/命令处理等忙时驱动 PM 锁自动跑 160 MHz）+ 空闲自动 light sleep（双核，
+       配合 WiFi modem-sleep 按 DTIM 唤醒，MQTT 长连接保持）。USB-SJC 副控制台与
+       light sleep 互斥：sdkconfig 已开 USJ_NO_AUTO_LS_ON_CONNECTION，PC 插着 USB
+       时自动不睡（端口稳定），拔除后省电全量生效。 */
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = (PWR_SAVE_ENABLE == 1),
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+
+    /* 设备配置持久化状态（NVS）在 MQTT 事件前就绪：版本/载荷/待回执 */
     appcfg_init();
 
     /* Suppress PHY lib debug output — prevents printf lock crash in IDF 6.0 */
@@ -127,62 +172,47 @@ void app_main(void)
 
     /* --- WiFi --- */
     if (!wifi_init_sta())
-    {
-        DEBUG_PRINTLN("WiFi connection failed, restarting...");
-        esp_restart();
-    }
+        backoff_restart("WiFi connection failed");
 
     /* --- Command queue ---
-     * 必须在 networkInitTask 之前创建：该任务里的 syncPendingCommands 会
-     * 向队列入队离线命令（开机积压时必现，队列为 NULL 将触发断言崩溃）。
-     * 深度 20：离线期间可积压多条控制/配置命令，cmdProcessTask 尚未启动时
-     * 全部暂存于此（sync 按 id 升序逐条入队）。 */
+     * 必须在 networkInitTask 之前创建：该任务里的 syncPendingCommands 会向队列
+     * 入队离线命令（队列为 NULL 将触发断言崩溃）。深度 20：离线期间可积压多条
+     * 控制/配置命令，cmdProcessTask 尚未启动时全部暂存于此。 */
     g_commandQueue = xQueueCreate(20, sizeof(CommandMsg));
     if (g_commandQueue == NULL)
-    {
-        DEBUG_PRINTLN("Failed to create command queue");
-        esp_restart();
-    }
+        backoff_restart("Failed to create command queue");
 
     /* --- Authentication + pending-command sync ---
-     * Run in a dedicated task: the TLS 1.3 ECDSA handshake on ESP32
-     * (no hardware crypto) takes 5–8 s.  Doing it in app_main starves
-     * IDLE0 and triggers the task watchdog at the default 5 s timeout. */
-    xTaskCreatePinnedToCore(networkInitTask, "NetInit", 8192,
-                            NULL, 2, NULL, 0);
+     * 独立任务：ESP32 无硬件加速，TLS ECDSA 握手需 5-8s，在主任务跑会饿死
+     * IDLE 触发 5s task WDT。NETWORK_INIT_DONE_BIT 必须 spawn 前清位、等待时
+     * clear-on-exit，否则该位自开机起常置，等待会短路空转。 */
+    xEventGroupClearBits(g_wifiEventGroup, NETWORK_INIT_DONE_BIT);
+    if (xTaskCreatePinnedToCore(networkInitTask, "NetInit", 8192,
+                                NULL, 2, NULL, 0) != pdPASS)
+        backoff_restart("Failed to create net init task");
     EventBits_t netBits = xEventGroupWaitBits(g_wifiEventGroup,
                                               NETWORK_INIT_DONE_BIT,
-                                              pdFALSE, pdTRUE,
+                                              pdTRUE, pdTRUE,
                                               pdMS_TO_TICKS(30000));
     if (!(netBits & NETWORK_INIT_DONE_BIT))
-    {
-        DEBUG_PRINTLN("Network init timeout, restarting...");
-        esp_restart();
-    }
+        backoff_restart("Network init timeout");
     if (!g_authSuccess)
-    {
-        DEBUG_PRINTLN("Authentication failed, restarting...");
-        esp_restart();
-    }
+        backoff_restart("Authentication failed");
 
     /* --- Temperature sensor --- */
     if (!sensor_init())
     {
-        DEBUG_PRINTLN("Temperature sensor init failed, continuing anyway...");
+        ESP_LOGW(TAG, "Temperature sensor init failed, continuing anyway...");
     }
 
     /* --- Peripheral bus: register drivers --- */
     periph_bus_init();
     /* 从云端配置快照（NVS）重放执行器定义与上报周期 —— 配置定义唯一真源 */
     appcfg_replay();
-
     /* --- MQTT client (WSS) --- */
     g_mqttClient = mqtt_app_create();
     if (g_mqttClient == NULL)
-    {
-        DEBUG_PRINTLN("Failed to create MQTT client");
-        esp_restart();
-    }
+        backoff_restart("Failed to create MQTT client");
     mqtt_app_start(g_mqttClient);
 
     /* --- Tasks --- */
@@ -194,53 +224,51 @@ void app_main(void)
     xTaskCreatePinnedToCore(cmdProcessTask, "CmdProcessTask", 8192,
                             NULL, 2, NULL, 1);
 
-    DEBUG_PRINTLN("System init complete");
+    ESP_LOGI(TAG, "System init complete");
 
-    /* The main thread becomes the Wi-Fi / MQTT watchdog (replaces loop()) */
-    TickType_t lastReconnectLog = 0;
+    /* 主线程 = WiFi / MQTT 看门狗：纯事件驱动阻塞等待，稳定期零唤醒，
+     * 不打断 light sleep。esp_wifi_connect 自动重连已在 WiFi 事件处理器里。 */
+    /* 进入监控前先清开机窗口残留的 latch：防止开机阶段一次瞬时抖动就在首轮对
+     * 健康客户端做虚假恢复（多烧一次 TLS）。若此刻真处于掉线态，esp_wifi/esp-mqtt
+     * 自动重连与 CONNACK 拒绝路径会再次置位收敛。 */
+    xEventGroupClearBits(g_wifiEventGroup,
+                         WIFI_DISCONNECTED_BIT | MQTT_AUTH_REFUSED_BIT |
+                         RECOVERY_DONE_BIT);
+
     for (;;)
     {
-        EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
+        EventBits_t bits = xEventGroupWaitBits(g_wifiEventGroup,
+                                               WIFI_DISCONNECTED_BIT | MQTT_AUTH_REFUSED_BIT,
+                                               pdTRUE, pdFALSE, portMAX_DELAY);
 
-        if (!(bits & WIFI_CONNECTED_BIT))
+        /* 拒绝位优先：双位同至时一次全量恢复即可。若先走快路径，失效 token
+         * 大概率又被拒，白烧 2 次 TLS 握手。 */
+        bool full_reauth = (bits & MQTT_AUTH_REFUSED_BIT) != 0;
+
+        if (bits & WIFI_DISCONNECTED_BIT)
         {
-            DEBUG_PRINTLN("WiFi disconnected, waiting for reconnect...");
+            ESP_LOGW("main", "WiFi disconnected, waiting for reconnect...");
             g_isMQTTConnected = false;
 
-            /* Block until WiFi reconnects or 30 s timeout */
-            bits = xEventGroupWaitBits(g_wifiEventGroup,
-                                       WIFI_CONNECTED_BIT,
-                                       pdFALSE, pdFALSE,
-                                       pdMS_TO_TICKS(30000));
-            if (!(bits & WIFI_CONNECTED_BIT))
+            /* esp_wifi 事件处理器已自动重连；最多等 4×30s，仍失败才退避重启 */
+            bool reconnected = false;
+            for (int i = 0; i < 4 && !reconnected; i++)
             {
-                DEBUG_PRINTLN("WiFi reconnection timeout, restarting...");
-                esp_restart();
+                EventBits_t cb = xEventGroupWaitBits(g_wifiEventGroup,
+                                                     WIFI_CONNECTED_BIT,
+                                                     pdFALSE, pdFALSE,
+                                                     pdMS_TO_TICKS(30000));
+                reconnected = (cb & WIFI_CONNECTED_BIT) != 0;
+                if (!reconnected)
+                    ESP_LOGW("main", "WiFi still down after %d s, keep waiting",
+                             (i + 1) * 30);
             }
-            g_mqttAuthRefused = false; /* 全新连接，清认证拒绝标志 */
-            recover_connection();
-        }
-        else if (g_mqttAuthRefused)
-        {
-            /* broker 拒绝连接 = Token 失效：立即停止 esp-mqtt 的无谓自动重连，
-             * 重新取 Token 并重建客户端（WiFi 未断，无需等待）。 */
-            DEBUG_PRINTLN("MQTT auth refused, re-authenticating...");
-            g_mqttAuthRefused = false;
-            recover_connection();
+            if (!reconnected)
+                backoff_restart("WiFi reconnection timeout");
         }
 
-        /* Log MQTT disconnect at most once per 10 s.
-         * Use tick-based arithmetic to avoid 49.7-day wraparound bugs. */
-        if (!g_isMQTTConnected && (bits & WIFI_CONNECTED_BIT))
-        {
-            TickType_t now = xTaskGetTickCount();
-            if (now - lastReconnectLog > pdMS_TO_TICKS(10000))
-            {
-                DEBUG_PRINTLN("MQTT disconnected, waiting for auto-reconnect...");
-                lastReconnectLog = now;
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
+        /* 退避归零只存在于 run_recovery 成功返回之后：若在恢复动作前归零，
+         * 恢复内部失败触发的重启永远只等 5s，风暴兜底形同虚设。 */
+        run_recovery(full_reauth);
     }
 }

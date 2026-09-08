@@ -1,11 +1,16 @@
-# TLS: verify servers against the ESP-IDF built-in x509 certificate bundle
-# (CMN = common roots, 36 authorities incl. DigiCert Global Root G2 —
-# api.meatsuger.top 链：TrustAsia DV TLS RSA CA 2025 → DigiCert Global Root G2).
-# No hardcoded PEMs in firmware.
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
-
-
-# --- Partition table: custom layout (see partitions.csv) ---
-# ESP32-S3-WROOM-1-N16R8: 16 MB flash. factory = 4 MB app partition.
+# This file was generated using idf.py save-defconfig or menuconfig [D] key. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 6.2.0 Project Minimal Configuration
+#
+# default:
+CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_TWO_OTA_LARGE=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+CONFIG_PM_ENABLE=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_FATFS_CODEPAGE_950=y
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y

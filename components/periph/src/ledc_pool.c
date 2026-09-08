@@ -1,8 +1,13 @@
 #include "ledc_pool.h"
 
 #include <math.h>
+#include <stdint.h>
 
 #include "common.h"
+#include "esp_log.h"
+#include "driver/ledc.h"
+
+static const char *TAG = "ledc_pool";
 
 /* --------------------------------------------------------------------------
  * LEDC channel/timer pool — generic PWM resource manager.
@@ -14,7 +19,10 @@
  * -------------------------------------------------------------------------- */
 
 #define LEDC_MODE        LEDC_LOW_SPEED_MODE
-#define LEDC_CLK_HZ      (80U * 1000 * 1000) /* APB clock, S3 */
+/* timer 时钟源 = XTAL(40 MHz, S3)：APB 无法跨 light sleep 保持（DFS 降到 80 MHz
+ * CPU 时 APB 仍为 80 MHz，但 light sleep 会门控 APB → PWM 掉输出），
+ * 改用 XTAL + KEEP_ALIVE 后舵机/风扇可跨睡眠持续驱动（见下方 sleep_mode） */
+#define LEDC_CLK_HZ      (40U * 1000 * 1000) /* XTAL clock, S3 */
 #define LEDC_POOL_SLOTS  8                   /* LEDC_CHANNEL_MAX */
 #define LEDC_POOL_TIMERS 4                   /* LEDC_TIMER_MAX */
 
@@ -38,7 +46,7 @@ static ledc_timer_slot_t g_timers[LEDC_POOL_TIMERS];
 static ledc_chan_slot_t g_channels[LEDC_POOL_SLOTS];
 static bool g_inited = false;
 
-/* 由频率推导 duty 分辨率（bit），并 clamp 到 [1, 14] */
+/* 由频率推导 duty 分辨率（bit），clamp 到 [1, 14] */
 static uint32_t resolution_for(uint32_t freq_hz)
 {
     if (freq_hz == 0)
@@ -74,7 +82,7 @@ static void pool_init(void)
     }
 }
 
-/* 找同频已启用 timer；没有则占用一个空闲 timer 并配置 */
+/* 复用同频已启用 timer；没有则占用一个空闲 timer 并配置 */
 static ledc_timer_slot_t *timer_for(uint32_t freq_hz)
 {
     uint32_t res = resolution_for(freq_hz);
@@ -96,24 +104,24 @@ static ledc_timer_slot_t *timer_for(uint32_t freq_hz)
                 .duty_resolution = (ledc_timer_bit_t)res,
                 .timer_num = g_timers[i].timer,
                 .freq_hz = freq_hz,
-                .clk_cfg = LEDC_USE_APB_CLK,
+                .clk_cfg = LEDC_USE_XTAL_CLK,
             };
             if (ledc_timer_config(&tcfg) != ESP_OK)
             {
-                DEBUG_PRINTLN("ledc_pool: timer config failed freq=%uHz",
+                ESP_LOGE(TAG, "ledc_pool: timer config failed freq=%uHz",
                               (unsigned)freq_hz);
                 return NULL;
             }
             g_timers[i].in_use = true;
             g_timers[i].freq_hz = freq_hz;
             g_timers[i].resolution_bit = res;
-            DEBUG_PRINTLN("ledc_pool: timer %d -> %u Hz / %u bit",
+            ESP_LOGI(TAG, "ledc_pool: timer %d -> %u Hz / %u bit",
                           i, (unsigned)freq_hz, (unsigned)res);
             return &g_timers[i];
         }
     }
 
-    DEBUG_PRINTLN("ledc_pool: no free timer for %u Hz", (unsigned)freq_hz);
+    ESP_LOGW(TAG, "ledc_pool: no free timer for %u Hz", (unsigned)freq_hz);
     return NULL;
 }
 
@@ -143,6 +151,8 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
                 .timer_sel = tm->timer,
                 .duty = 0,
                 .hpoint = 0,
+                /* 跨 light sleep 保持 PWM 输出：舵机维持位置/风扇不抖停 */
+                .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
                 return -1;
@@ -163,6 +173,8 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
                 .timer_sel = tm->timer,
                 .duty = 0,
                 .hpoint = 0,
+                /* 跨 light sleep 保持 PWM 输出：舵机维持位置/风扇不抖停 */
+                .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
                 return -1;
@@ -174,7 +186,7 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
         }
     }
 
-    DEBUG_PRINTLN("ledc_pool: all channels in use");
+    ESP_LOGW(TAG, "ledc_pool: all channels in use");
     return -1;
 }
 
@@ -185,6 +197,10 @@ bool ledc_pool_release(int gpio)
         ledc_chan_slot_t *s = &g_channels[i];
         if (s->in_use && s->gpio == gpio)
         {
+            /* 停止输出并回空闲低电平。注意：IDF 驱动删除通道不清 keep_alive/
+             * xpd 引用计数（ledc.c 源码 TODO），全部 PWM 设备移除后仍需重启
+             * 才能完全释放睡眠保持电流——当前接受。 */
+            ledc_stop(LEDC_MODE, s->channel, 0);
             s->in_use = false;
             s->gpio = -1;
             s->timer = LEDC_TIMER_MAX;

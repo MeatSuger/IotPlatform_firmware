@@ -3,8 +3,11 @@
 #include <stdlib.h>
 
 #include "common.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "driver/gpio.h"
+
+static const char *TAG = "gpio";
 
 /* Driver-private data (dev->drvdata). */
 typedef struct
@@ -24,7 +27,7 @@ static bool gpio_probe(periph_device_t *dev, const cJSON *cfg)
     cJSON *pin = cJSON_GetObjectItem(cfg, "pin");
     if (!cJSON_IsNumber(pin))
     {
-        DEBUG_PRINTLN("gpio[%s]: config.pin 缺失", dev->name);
+        ESP_LOGE(TAG, "gpio[%s]: config.pin 缺失", dev->name);
         return false;
     }
     int gpio = pin->valueint;
@@ -58,7 +61,7 @@ static bool gpio_probe(periph_device_t *dev, const cJSON *cfg)
     gpio_reset_pin(gpio);
     gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
     gpio_set_level(gpio, to_physical(g, initial));
-    DEBUG_PRINTLN("gpio[%s] ready: pin=%d active_high=%d initial=%d",
+    ESP_LOGI(TAG, "gpio[%s] ready: pin=%d active_high=%d initial=%d",
                   dev->name, gpio, active_high, initial);
     return true;
 }
@@ -100,7 +103,7 @@ static bool gpio_command(periph_device_t *dev, const cJSON *pl)
         return true;
     }
 
-    DEBUG_PRINTLN("gpio[%s]: value 需含 level 或 toggle", dev->name);
+    ESP_LOGW(TAG, "gpio[%s]: value 需含 level 或 toggle", dev->name);
     return false;
 }
 

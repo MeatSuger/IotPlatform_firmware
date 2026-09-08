@@ -1,10 +1,14 @@
 #include "pwm_driver.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "common.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "ledc_pool.h"
+
+static const char *TAG = "pwm";
 
 /* Driver-private data (dev->drvdata). */
 typedef struct
@@ -17,7 +21,7 @@ static bool pwm_probe(periph_device_t *dev, const cJSON *cfg)
     cJSON *pin = cJSON_GetObjectItem(cfg, "pin");
     if (!cJSON_IsNumber(pin))
     {
-        DEBUG_PRINTLN("pwm[%s]: config.pin 缺失", dev->name);
+        ESP_LOGE(TAG, "pwm[%s]: config.pin 缺失", dev->name);
         return false;
     }
     int gpio = pin->valueint;
@@ -32,7 +36,7 @@ static bool pwm_probe(periph_device_t *dev, const cJSON *cfg)
     if (ledc_pool_acquire(gpio, freq) < 0)
     {
         periph_pin_release(gpio);
-        DEBUG_PRINTLN("pwm[%s]: LEDC 通道分配失败 (pin=%d freq=%uHz)",
+        ESP_LOGE(TAG, "pwm[%s]: LEDC 通道分配失败 (pin=%d freq=%uHz)",
                       dev->name, gpio, (unsigned)freq);
         return false;
     }
@@ -48,7 +52,7 @@ static bool pwm_probe(periph_device_t *dev, const cJSON *cfg)
     dev->drvdata = p;
 
     ledc_pool_set_duty_pct(gpio, 0);
-    DEBUG_PRINTLN("pwm[%s] ready: pin=%d freq=%uHz", dev->name, gpio,
+    ESP_LOGI(TAG, "pwm[%s] ready: pin=%d freq=%uHz", dev->name, gpio,
                   (unsigned)freq);
     return true;
 }
@@ -85,7 +89,7 @@ static bool pwm_command(periph_device_t *dev, const cJSON *pl)
     if (cJSON_IsNumber(duty))
         return ledc_pool_set_duty_pct(p->pin, duty->valueint);
 
-    DEBUG_PRINTLN("pwm[%s]: value 需含 duty(0-100) 或 pulse_us", dev->name);
+    ESP_LOGW(TAG, "pwm[%s]: value 需含 duty(0-100) 或 pulse_us", dev->name);
     return false;
 }
 

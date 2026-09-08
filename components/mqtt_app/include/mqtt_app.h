@@ -21,9 +21,10 @@
  * reconnect) and check the connection flag first.
  * -------------------------------------------------------------------------- */
 
-/* MQTT 客户端句柄与连接状态（定义于 main/app_main.c，由 mqtt 组件独占维护） */
+/* MQTT 客户端句柄与连接状态（定义于 main/app_main.c，由 mqtt 组件独占维护）。
+ * g_isMQTTConnected 写者 = MQTT 事件回调任务，读者 = 主任务/上报任务：volatile */
 extern esp_mqtt_client_handle_t g_mqttClient;
-extern bool g_isMQTTConnected;
+extern volatile bool g_isMQTTConnected;
 
 /* Create and configure the MQTT client (does not start it).
  * Returns NULL on failure. */

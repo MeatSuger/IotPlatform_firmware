@@ -2,8 +2,6 @@
 #define _PERIPH_H_
 
 #include <stdbool.h>
-#include <stdint.h>
-#include <stddef.h>
 
 /* --------------------------------------------------------------------------
  * Peripheral bus — 声明式外设框架（Linux device/driver 模型）。

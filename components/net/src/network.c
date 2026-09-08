@@ -1,12 +1,17 @@
 #include "network.h"
+#include "common.h"
 #include "token.h"
 
 #include <limits.h> /* INT_MAX */
 #include <strings.h>
+#include <string.h>
+#include <stdlib.h>
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
 #include "cJSON.h"
 #include "esp_log.h"
+
+static const char *TAG = "net";
 
 /* Max HTTP response body to buffer */
 #define MAX_HTTP_OUTPUT_BUFFER 8192
@@ -97,7 +102,7 @@ static int parse_api_code(const char *body)
     cJSON *root = cJSON_Parse(body);
     if (root == NULL)
     {
-        DEBUG_PRINTLN("Envelope parse error: %s",
+        ESP_LOGE(TAG, "Envelope parse error: %s",
                       cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
         return -1;
     }
@@ -118,21 +123,21 @@ static int parse_api_code(const char *body)
 bool authbydeviceid(void)
 {
 
-    DEBUG_PRINTLN("Starting device authentication...");
+    ESP_LOGI(TAG, "Starting device authentication...");
 
     /* Allocate everything on heap — main task stack is only 3584 bytes */
     char *buf_data = malloc(MAX_HTTP_OUTPUT_BUFFER);
     http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
     esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
     if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
-        DEBUG_PRINTLN("OOM: cannot allocate HTTP buffers");
+        ESP_LOGE(TAG, "OOM: cannot allocate HTTP buffers");
         free(buf_data); free(rbuf); free(cfg);
         return false;
     }
     *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
                                 .cap = MAX_HTTP_OUTPUT_BUFFER };
     make_http_config(cfg, TOKEN_URL, rbuf);
-    DEBUG_PRINTLN("HTTP URL = [%s]", cfg->url);
+    ESP_LOGD(TAG, "HTTP URL = [%s]", cfg->url);
     esp_http_client_handle_t http = esp_http_client_init(cfg);
 
     esp_err_t err = esp_http_client_perform(http);
@@ -145,44 +150,42 @@ bool authbydeviceid(void)
     int httpCode = esp_http_client_get_status_code(http);
     bool authSuccess = false;
 
-    DEBUG_PRINT("HTTP status: %d\n", httpCode);
+    ESP_LOGD(TAG, "HTTP status: %d", httpCode);
 
     /* 统一信封：HTTP 200 + body.code==200 才是业务成功 */
     if (httpCode == 200 && parse_api_code(rbuf->data) == 200) {
-        DEBUG_PRINTLN("Login request successful");
+        ESP_LOGI(TAG, "Login request successful");
 
         char *new_token = NULL;
 
-        /* 先尝试从 Set-Cookie 提取 */
         if (strlen(rbuf->set_cookie) > 0) {
+            /* 优先从 Set-Cookie 提取，否则从 JSON body 提取 */
             new_token = extractTokenFromHeader(rbuf->set_cookie);
         }
 
-        /* 如果未提取到，尝试从 JSON body 提取 */
         if (new_token == NULL && rbuf->len > 0) {
             new_token = extractTokenFromBody(rbuf->data);
         }
 
         if (new_token != NULL) {
-            /* 加载旧 token（可能为 NULL） */
             char *old_token = token_load();
 
             if (old_token != NULL && strcmp(old_token, new_token) == 0) {
-                DEBUG_PRINTLN("Token unchanged, skip saving");
+                ESP_LOGI(TAG, "Token unchanged, skip saving");
             } else {
                 token_save(new_token);
-                DEBUG_PRINTLN("Token updated (new token differs from old or old was NULL)");
+                ESP_LOGI(TAG, "Token updated (new token differs from old or old was NULL)");
             }
 
-            free(old_token);   // token_load 返回的是 malloc 的副本
+            free(old_token);   /* token_load 返回 malloc 副本 */
             free(new_token);
             authSuccess = true;
         } else {
-            DEBUG_PRINTLN("Failed to extract token from response");
+            ESP_LOGE(TAG, "Failed to extract token from response");
             authSuccess = false;
         }
     } else {
-        DEBUG_PRINT("Authentication failed: http=%d body=%.120s\n",
+        ESP_LOGE(TAG, "Authentication failed: http=%d body=%.120s",
                     httpCode, rbuf->data);
         authSuccess = false;
     }
@@ -191,11 +194,11 @@ bool authbydeviceid(void)
 
     if (authSuccess) {
         char *tok = token_load();
-        DEBUG_PRINT("Auth token: %s\n", tok ? tok : "(null)");
+        ESP_LOGD(TAG, "Auth token: %s", tok ? tok : "(null)");
         free(tok);
     }
     else
-        DEBUG_PRINTLN("Authentication failed: cannot retrieve token");
+        ESP_LOGE(TAG, "Authentication failed: cannot retrieve token");
 
     free(cfg); free(rbuf); free(buf_data);
     return authSuccess;
@@ -223,7 +226,7 @@ bool syncPendingCommands(void)
     http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
     esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
     if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
-        DEBUG_PRINTLN("Sync: OOM");
+        ESP_LOGE(TAG, "Sync: OOM");
         free(buf_data); free(rbuf); free(cfg); free(token);
         return false;
     }
@@ -246,41 +249,40 @@ bool syncPendingCommands(void)
     esp_http_client_cleanup(http);
     free(token);
 
-    /* 统一信封判定：HTTP 200 仅是到达，业务结果看 body.code（§2.1） */
+    /* 业务结果看 body.code（HTTP 200 仅是到达） */
     int apiCode = parse_api_code(rbuf->data);
     if (httpCode != 200 || apiCode != 200) {
-        DEBUG_PRINT("Sync: http=%d code=%d body=%.160s\n",
+        ESP_LOGW(TAG, "Sync: http=%d code=%d body=%.160s",
                     httpCode, apiCode, rbuf->data);
         if (apiCode == 401) {
-            DEBUG_PRINTLN("Sync: device token invalid/expired, clearing local token");
+            ESP_LOGW(TAG, "Sync: device token invalid/expired, clearing local token");
             token_clear();
         }
         free(cfg); free(rbuf); free(buf_data);
         return false;
     }
 
-    DEBUG_PRINT("Sync response: %s\n", rbuf->data);
+    ESP_LOGD(TAG, "Sync response: %s", rbuf->data);
 
     /* Parse JSON */
     cJSON *root = cJSON_Parse(rbuf->data);
     free(cfg); free(rbuf); free(buf_data);
 
     if (root == NULL) {
-        DEBUG_PRINTLN("Sync: JSON parse error");
+        ESP_LOGE(TAG, "Sync: JSON parse error");
         return false;
     }
 
     cJSON *arr = cJSON_GetObjectItem(root, "data");
     if (arr == NULL || !cJSON_IsArray(arr)) {
-        DEBUG_PRINTLN("Sync: no data array");
+        ESP_LOGI(TAG, "Sync: no data array");
         cJSON_Delete(root);
         return false;
     }
 
     /* 按 id 升序逐条入队（拉取即消费：丢弃即永久丢失） */
-    if (g_commandQueue == NULL)
-    {
-        DEBUG_PRINTLN("Sync: command queue not ready, skip enqueue");
+    if (g_commandQueue == NULL)    {
+        ESP_LOGW(TAG, "Sync: command queue not ready, skip enqueue");
         cJSON_Delete(root);
         return false;
     }
@@ -303,25 +305,24 @@ bool syncPendingCommands(void)
 
         char *cmdStr = cJSON_PrintUnformatted(next);
         if (cmdStr == NULL) {
-            DEBUG_PRINTLN("Sync: serialization failed for cmd id=%d", nextId);
+            ESP_LOGE(TAG, "Sync: serialization failed for cmd id=%d", nextId);
             break;
         }
         CommandMsg cmdMsg;
         cmdMsg.payload = cmdStr;
         cmdMsg.length = strlen(cmdStr);
 
-        /* Use a timeout to avoid permanent deadlock if the queue is
-         * unexpectedly full. 队列满说明处理任务尚未就绪/积压：
-         * 丢弃剩余条目并退出（已入队部分仍会被消费）。 */
+        /* 超时入队：队列满说明处理任务未就绪/积压，丢弃剩余并退出
+         * （已入队部分仍会被消费），避免永久死锁 */
         if (xQueueSend(g_commandQueue, &cmdMsg, pdMS_TO_TICKS(5000)) != pdPASS) {
-            DEBUG_PRINTLN("Sync: queue full, dropping remaining commands");
+            ESP_LOGW(TAG, "Sync: queue full, dropping remaining commands");
             free(cmdStr);
             break;
         }
         enqueued++;
         lastId = nextId;
     }
-    DEBUG_PRINT("Sync: enqueued %d pending command(s)\n", enqueued);
+    ESP_LOGI(TAG, "Sync: enqueued %d pending command(s)", enqueued);
     cJSON_Delete(root);
     return enqueued > 0;
 }
@@ -359,7 +360,7 @@ char *extractTokenFromBody(const char *jsonBody)
 {
     cJSON *root = cJSON_Parse(jsonBody);
     if (root == NULL) {
-        DEBUG_PRINT("JSON parse error: %s\n",
+        ESP_LOGE(TAG, "JSON parse error: %s",
                      cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
         return NULL;
     }

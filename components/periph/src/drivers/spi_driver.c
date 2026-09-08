@@ -2,10 +2,15 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #include "common.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "driver/spi_master.h"
+
+static const char *TAG = "spi";
 
 #define SPI_HOST          SPI2_HOST
 #define SPI_TX_MAX_BYTES  256
@@ -18,7 +23,7 @@ typedef struct
     spi_device_handle_t handle;
 } spi_dev_t;
 
-/* 总线级共享状态：首个实例初始化，末个实例释放 */
+/* 总线级共享状态：首个实例初始化并占总线引脚，末个实例释放 */
 static bool g_bus_up = false;
 static int g_clk = -1, g_mosi = -1, g_miso = -1;
 static int g_bus_users = 0;
@@ -30,7 +35,6 @@ static void bus_teardown(void)
         spi_bus_free(SPI_HOST);
         g_bus_up = false;
     }
-    /* 总线引脚由首个实例 claim，末个实例 release */
     periph_pin_release(g_clk);
     periph_pin_release(g_mosi);
     periph_pin_release(g_miso);
@@ -46,7 +50,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     if (!cJSON_IsNumber(jclk) || !cJSON_IsNumber(jmosi) ||
         !cJSON_IsNumber(jcs))
     {
-        DEBUG_PRINTLN("spi[%s]: config 需 clk/mosi/cs", dev->name);
+        ESP_LOGE(TAG, "spi[%s]: config 需 clk/mosi/cs", dev->name);
         return false;
     }
     int clk = jclk->valueint, mosi = jmosi->valueint, cs = jcs->valueint;
@@ -76,7 +80,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
             !periph_pin_claim(mosi, dev->name) ||
             (miso >= 0 && !periph_pin_claim(miso, dev->name)))
         {
-            DEBUG_PRINTLN("spi[%s]: 总线引脚被占用", dev->name);
+            ESP_LOGW(TAG, "spi[%s]: 总线引脚被占用", dev->name);
             periph_pin_release(cs);
             return false;
         }
@@ -91,7 +95,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
         };
         if (spi_bus_initialize(SPI_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK)
         {
-            DEBUG_PRINTLN("spi[%s]: spi_bus_initialize 失败", dev->name);
+            ESP_LOGE(TAG, "spi[%s]: spi_bus_initialize 失败", dev->name);
             periph_pin_release(clk);
             periph_pin_release(mosi);
             periph_pin_release(miso);
@@ -106,7 +110,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     else if (g_clk != clk || g_mosi != mosi || g_miso != miso)
     {
         /* 总线已由其它实例按不同引脚初始化：拒绝（保持单总线拓扑简单） */
-        DEBUG_PRINTLN("spi[%s]: 总线引脚与已初始化实例不一致", dev->name);
+        ESP_LOGE(TAG, "spi[%s]: 总线引脚与已初始化实例不一致", dev->name);
         periph_pin_release(cs);
         return false;
     }
@@ -120,7 +124,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     spi_device_handle_t handle = NULL;
     if (spi_bus_add_device(SPI_HOST, &devcfg, &handle) != ESP_OK)
     {
-        DEBUG_PRINTLN("spi[%s]: spi_bus_add_device 失败", dev->name);
+        ESP_LOGE(TAG, "spi[%s]: spi_bus_add_device 失败", dev->name);
         periph_pin_release(cs);
         g_bus_users--;
         if (g_bus_users == 0)
@@ -143,7 +147,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     s->handle = handle;
     dev->drvdata = s;
 
-    DEBUG_PRINTLN("spi[%s] ready: cs=%d clk=%d mosi=%d freq=%d mode=%d",
+    ESP_LOGI(TAG, "spi[%s] ready: cs=%d clk=%d mosi=%d freq=%d mode=%d",
                   dev->name, cs, clk, mosi, freq, mode);
     return true;
 }
@@ -236,7 +240,7 @@ static bool spi_command(periph_device_t *dev, const cJSON *pl)
     int len = parse_tx(tx, buf, sizeof buf);
     if (len < 0)
     {
-        DEBUG_PRINTLN("spi[%s]: value.tx 需为 hex 字符串或 0-255 数组",
+        ESP_LOGW(TAG, "spi[%s]: value.tx 需为 hex 字符串或 0-255 数组",
                       dev->name);
         return false;
     }

@@ -4,9 +4,15 @@
 #include <string.h>
 
 #include "common.h"
+#include "esp_log.h"
 #include "token.h"
 #include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
-#include "token.h"
+
+/* esp-mqtt 组件内部 ESP_EVENT_DEFINE_BASE(MQTT_EVENTS)，但未在 public header 导出，
+ * 这里按 esp_event 惯例自行声明，用于在回调里校验 event base。 */
+ESP_EVENT_DECLARE_BASE(MQTT_EVENTS);
+
+static const char *TAG = "mqtt";
 
 /* --------------------------------------------------------------------------
  * mqtt_event_handler — callback for esp_mqtt_client events
@@ -23,38 +29,40 @@ static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
+    esp_mqtt_client_handle_t client = handler_args;
+    if (base != MQTT_EVENTS) /* 防御：本模块仅注册于 MQTT_EVENTS base */
+        return;
+
     esp_mqtt_event_handle_t event = event_data;
 
-    switch (event->event_id)
+    switch (event_id)
     {
     case MQTT_EVENT_CONNECTED:
-        DEBUG_PRINTLN("MQTT connected");
+        ESP_LOGI(TAG, "MQTT connected");
         g_isMQTTConnected = true;
-        g_mqttAuthRefused = false; /* broker 接受了凭证，清认证拒绝标志 */
+        if (g_wifiEventGroup != NULL)
+            xEventGroupClearBits(g_wifiEventGroup, MQTT_AUTH_REFUSED_BIT); /* broker 接受了凭证 */
 
-        /* Subscribe to command topic (QoS1：实时命令/离线后 HTTP 兜底) */
-        esp_mqtt_client_subscribe(event->client, MQTT_TOPIC_CMD, 1);
-        DEBUG_PRINTLN("Subscribed to: %s", MQTT_TOPIC_CMD);
+        /* Subscribe QoS1：实时命令/离线后 HTTP 兜底 */
+        esp_mqtt_client_subscribe(client, MQTT_TOPIC_CMD, 1);
+        ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CMD);
 
-        /* Subscribe to cloud config topic (QoS1：订阅即收到 retained 最新快照) */
-        esp_mqtt_client_subscribe(event->client, MQTT_TOPIC_CONFIG, 1);
-        DEBUG_PRINTLN("Subscribed to: %s", MQTT_TOPIC_CONFIG);
+        /* Subscribe QoS1：订阅即收到 retained 最新配置快照 */
+        esp_mqtt_client_subscribe(client, MQTT_TOPIC_CONFIG, 1);
+        ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CONFIG);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
-        DEBUG_PRINTLN("MQTT disconnected");
+        ESP_LOGW(TAG, "MQTT disconnected");
         g_isMQTTConnected = false;
-        /* Drain queue and free pending payloads */
-        {
-            CommandMsg msg;
-            while (xQueueReceive(g_commandQueue, &msg, 0) == pdTRUE)
-                free(msg.payload);
-        }
+        /* 不 drain 命令队列：队列消费者 cmdProcessTask 与传输层无关，断线清空
+         * 无正确性依据，反而会冲掉 HTTP 兜底刚同步入队的离线命令；队列深 20，
+         * 满时已有入队侧显式丢弃日志。 */
         break;
 
     case MQTT_EVENT_DATA:
     {
-        DEBUG_PRINTLN("MQTT message received, topic: %.*s, data: %.*s",
+        ESP_LOGD(TAG, "MQTT message received, topic: %.*s, data: %.*s",
                       event->topic_len, event->topic,
                       event->data_len, event->data);
 
@@ -68,7 +76,7 @@ static void mqtt_event_handler(void *handler_args,
         cmdMsg.payload = malloc(event->data_len + 1);
         if (cmdMsg.payload == NULL)
         {
-            DEBUG_PRINTLN("OOM: cannot allocate command payload");
+            ESP_LOGE(TAG, "OOM: cannot allocate command payload");
             break;
         }
         memcpy(cmdMsg.payload, event->data, event->data_len);
@@ -77,24 +85,25 @@ static void mqtt_event_handler(void *handler_args,
 
         if (xQueueSend(g_commandQueue, &cmdMsg, 0) != pdPASS)
         {
-            DEBUG_PRINTLN("Command queue full, dropping message");
+            ESP_LOGW(TAG, "Command queue full, dropping message");
             free(cmdMsg.payload);
         }
         break;
     }
 
     case MQTT_EVENT_ERROR:
-        DEBUG_PRINTLN("MQTT error");
+        ESP_LOGE(TAG, "MQTT error");
         g_isMQTTConnected = false;
         /* 连接被 broker 拒绝（CONNACK 非 accepted）：用户名=DEVICE_ID 固定，
-         * 拒绝即密码（设备 Token）失效/被清理。置位后由 app_main 主循环触发
+         * 拒绝即密码（设备 Token）失效/被清理。置位事件后由 app_main 主循环触发
          * 重新取 Token + 重建客户端，避免 esp-mqtt 无限自动重连失败。 */
         if (event->error_handle != NULL &&
             event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED)
         {
-            DEBUG_PRINTLN("MQTT connection refused (return_code=%d), token likely stale",
+            ESP_LOGW(TAG, "MQTT connection refused (return_code=%d), token likely stale",
                           (int)event->error_handle->connect_return_code);
-            g_mqttAuthRefused = true;
+            if (g_wifiEventGroup != NULL)
+                xEventGroupSetBits(g_wifiEventGroup, MQTT_AUTH_REFUSED_BIT);
         }
         break;
 
@@ -117,18 +126,20 @@ esp_mqtt_client_handle_t mqtt_app_create(void)
                 .crt_bundle_attach = esp_crt_bundle_attach,
             },
         },
+        .session = {
+            .keepalive = MQTT_KEEPALIVE_S,
+        },
+        .network = {
+            .reconnect_timeout_ms = MQTT_RECONNECT_TIMEOUT_MS,
+        },
         .credentials = {
             .username = DEVICE_ID,
-            .authentication = {
-                .password = token_load(), /* will be set later if token is available */
-            }
         },
     };
 
-    /* If we have an auth token, use it as the MQTT password.
-     * NOTE: the MQTT client stores the password pointer directly —
-     * the underlying data must outlive the client.  Do NOT free(token)
-     * here; it will be freed when the MQTT client is destroyed. */
+    /* 用 auth token（如有）作为 MQTT 密码。esp-mqtt 在 init 内部 strdup 了
+     * password，destroy 时释放的是那份副本，因此 init 返回后本地的 token
+     * 副本即可释放，无需存活到客户端销毁。 */
     char *token = token_load();
     if (token != NULL && strlen(token) > 0)
     {
@@ -136,14 +147,12 @@ esp_mqtt_client_handle_t mqtt_app_create(void)
     }
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    free(token);
     if (client == NULL)
-    {
-        free(token);
         return NULL;
-    }
 
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID,
-                                   mqtt_event_handler, NULL);
+                                   mqtt_event_handler, client);
     return client;
 }
 
@@ -175,7 +184,7 @@ bool mqtt_publish(const char *topic, const char *payload, size_t len)
     int msg_id = esp_mqtt_client_publish(client, topic, payload, len, 0, 0);
     if (msg_id >= 0)
     {
-        DEBUG_PRINT("MQTT published [msg_id=%d] to %s: %.*s\n",
+        ESP_LOGD(TAG, "MQTT published [msg_id=%d] to %s: %.*s",
                     msg_id, topic, (int)(len > 200 ? 200 : len), payload);
         return true;
     }

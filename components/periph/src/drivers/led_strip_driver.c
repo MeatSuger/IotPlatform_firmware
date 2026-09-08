@@ -1,10 +1,14 @@
 #include "led_strip_driver.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "common.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "led_strip.h"
+
+static const char *TAG = "led_strip";
 
 #if PERIPH_LED_ENABLE
 
@@ -69,7 +73,7 @@ static bool led_strip_probe(periph_device_t *dev, const cJSON *cfg)
     dev->drvdata = ld;
 
     led_strip_clear(strip);
-    DEBUG_PRINTLN("led_strip[%s] ready: %d LED(s) on GPIO %d",
+    ESP_LOGI(TAG, "led_strip[%s] ready: %d LED(s) on GPIO %d",
                   dev->name, count, gpio);
     return true;
 }
@@ -101,7 +105,7 @@ static bool led_strip_command(periph_device_t *dev, const cJSON *pl)
     cJSON *rgb = cJSON_GetObjectItem(value, "rgb");
     if (!cJSON_IsArray(rgb) || cJSON_GetArraySize(rgb) != 3)
     {
-        DEBUG_PRINTLN("led_strip[%s]: value.rgb 需为 [r,g,b]",
+        ESP_LOGW(TAG, "led_strip[%s]: value.rgb 需为 [r,g,b]",
                       dev->name);
         return false;
     }

@@ -1,7 +1,7 @@
 #ifndef _NETWORK_H_
 #define _NETWORK_H_
 
-#include "common.h"
+#include <stdbool.h>
 
 /* 设备认证：DeviceIDAuth（仅需路径 deviceId）——获取/刷新设备 Token。
  * 返回 true 表示成功取得并保存 Token。 */
