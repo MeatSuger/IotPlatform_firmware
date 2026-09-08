@@ -46,4 +46,19 @@
 /* broker 不可达时 esp-mqtt 重连间隔（默认 ~10s）：避免频繁 TLS 全握手（5-8s 高功耗） */
 #define MQTT_RECONNECT_TIMEOUT_MS 60000
 
+/* 主循环 MQTT 监督（防 esp-mqtt 内部 auto-reconnect 静默失效后无人兜底）：
+ * esp-mqtt 的重连尝试不向应用层抛事件，一旦其内部重连（TCP 半开 / 陈旧内核
+ * socket / TLS、DNS 瞬时异常）卡死，WiFi 在线时本固件收不到任何信号、永不复连。
+ * - MQTT_SUPERVISE_PERIOD_MS   监督唤醒周期：主循环周期性醒来检查
+ *   "WiFi 在线但 MQTT 未连接"，唤醒耗电与 DTIM 周期唤醒相比可忽略。
+ * - MQTT_STUCK_DEADLINE_MS     WiFi 在线且 MQTT 连续断连超过该时长 → 强制一次
+ *   token-reuse 恢复（毁旧建新 = 全新 TCP/TLS/DNS + 重新订阅）。取值须大于
+ *   esp-mqtt 自然重试周期（reconnect_timeout 60s + 连接超时裕量），避免干扰库内
+ *   正常重连；CONNACK 拒绝仍走既有的全量重认证路径（见 app_main）。
+ * - MQTT_SUPERVISE_MAX_MS      连续强制恢复仍失败（broker 长时不可达，非 esp-mqtt
+ *   卡死）时，强制间隔翻倍的上限；连接成功即回到 MQTT_STUCK_DEADLINE_MS。 */
+#define MQTT_SUPERVISE_PERIOD_MS   30000U
+#define MQTT_STUCK_DEADLINE_MS     180000U
+#define MQTT_SUPERVISE_MAX_MS      900000U
+
 #endif /* _CONFIG_H_ */

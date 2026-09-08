@@ -226,29 +226,47 @@ void app_main(void)
 
     ESP_LOGI(TAG, "System init complete");
 
-    /* 主线程 = WiFi / MQTT 看门狗：纯事件驱动阻塞等待，稳定期零唤醒，
-     * 不打断 light sleep。esp_wifi_connect 自动重连已在 WiFi 事件处理器里。 */
-    /* 进入监控前先清开机窗口残留的 latch：防止开机阶段一次瞬时抖动就在首轮对
+    /* 主线程 = WiFi / MQTT 看门狗。esp_wifi_connect 自动重连已在 WiFi 事件处理器里；
+     * 进入监控前先清开机窗口残留的 latch：防止开机阶段一次瞬时抖动就在首轮对
      * 健康客户端做虚假恢复（多烧一次 TLS）。若此刻真处于掉线态，esp_wifi/esp-mqtt
-     * 自动重连与 CONNACK 拒绝路径会再次置位收敛。 */
+     * 自动重连与 CONNACK 拒绝路径会再次置位收敛。
+     *
+     * 三个触发源：
+     *   1) WIFI_DISCONNECTED_BIT —— WiFi 掉线：等 WiFi 重连后 token-reuse 恢复
+     *   2) MQTT_AUTH_REFUSED_BIT —— broker CONNACK 拒绝：全量重认证恢复
+     *   3) 监督超时（新增）      —— WiFi 在线但 MQTT 连续断连超过
+     *      MQTT_STUCK_DEADLINE_MS。esp-mqtt 的 auto-reconnect 是库内部静默行为
+     *      （reconnect_timeout 周期、无事件上抛、日志在 debug 级）；若其内部重连
+     *      因 TCP 半开/socket 陈旧/TLS、DNS 瞬时异常而卡住，WiFi 在线时本固件将
+     *      收不到任何事件、永不重连（正是“MQTT 断连后无法重新连接”）。故以
+     *      MQTT_SUPERVISE_PERIOD_MS 周期唤醒主循环检查，超时即强制一次 token-reuse
+     *      恢复，把重连主动权收回应用层。原“稳定期零唤醒”因此改为低频周期唤醒
+     *      （30s 一次，耗电与 DTIM 周期唤醒相比可忽略）。 */
     xEventGroupClearBits(g_wifiEventGroup,
                          WIFI_DISCONNECTED_BIT | MQTT_AUTH_REFUSED_BIT |
                          RECOVERY_DONE_BIT);
 
+    TickType_t mqttDownSince = 0; /* 0 = 未计时；非 0 = “WiFi 在线 && MQTT 断连”计时起点 */
+    uint32_t mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* 强制恢复前允许的断连时长；成功后归位，连续失败翻倍至 MQTT_SUPERVISE_MAX_MS */
     for (;;)
     {
         EventBits_t bits = xEventGroupWaitBits(g_wifiEventGroup,
                                                WIFI_DISCONNECTED_BIT | MQTT_AUTH_REFUSED_BIT,
-                                               pdTRUE, pdFALSE, portMAX_DELAY);
+                                               pdTRUE, pdFALSE,
+                                               pdMS_TO_TICKS(MQTT_SUPERVISE_PERIOD_MS));
 
         /* 拒绝位优先：双位同至时一次全量恢复即可。若先走快路径，失效 token
          * 大概率又被拒，白烧 2 次 TLS 握手。 */
         bool full_reauth = (bits & MQTT_AUTH_REFUSED_BIT) != 0;
+        bool wifi_was_down = (bits & WIFI_DISCONNECTED_BIT) != 0;
+        bool supervise_force = false;
 
-        if (bits & WIFI_DISCONNECTED_BIT)
+        if (wifi_was_down)
         {
             ESP_LOGW("main", "WiFi disconnected, waiting for reconnect...");
             g_isMQTTConnected = false;
+            mqttDownSince = 0;      /* WiFi 掉线期间由下方恢复流程接管，不累计 MQTT 断连计时 */
+            mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* WiFi 恢复后重建全新连接，强制间隔归位 */
 
             /* esp_wifi 事件处理器已自动重连；最多等 4×30s，仍失败才退避重启 */
             bool reconnected = false;
@@ -266,9 +284,43 @@ void app_main(void)
             if (!reconnected)
                 backoff_restart("WiFi reconnection timeout");
         }
+        else if (!full_reauth)
+        {
+            /* 纯 MQTT 断连监督：仅当 WiFi 在线且无认证拒绝事件时累计断连时长 */
+            if ((xEventGroupGetBits(g_wifiEventGroup) & WIFI_CONNECTED_BIT) &&
+                !g_isMQTTConnected)
+            {
+                if (mqttDownSince == 0)
+                    mqttDownSince = xTaskGetTickCount();
+                else if (xTaskGetTickCount() - mqttDownSince >= pdMS_TO_TICKS(mqttStuckWaitMs))
+                {
+                    ESP_LOGW("main",
+                             "MQTT down for %u s while WiFi is up, forcing "
+                             "supervised recovery (token reuse)",
+                             (unsigned)(mqttStuckWaitMs / 1000));
+                    mqttDownSince = 0;
+                    supervise_force = true;
+                    /* 仍连不上（broker 长时不可达，非 esp-mqtt 卡死）时退避翻倍，
+                     * 避免无谓的反复毁建；一旦连上，else 分支会将间隔归位。 */
+                    mqttStuckWaitMs *= 2U;
+                    if (mqttStuckWaitMs > MQTT_SUPERVISE_MAX_MS)
+                        mqttStuckWaitMs = MQTT_SUPERVISE_MAX_MS;
+                }
+            }
+            else
+            {
+                mqttDownSince = 0;                    /* MQTT 已连接（或 WiFi 不在线）：清零计时 */
+                mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* 连接恢复，间隔归位 */
+            }
+        }
 
         /* 退避归零只存在于 run_recovery 成功返回之后：若在恢复动作前归零，
-         * 恢复内部失败触发的重启永远只等 5s，风暴兜底形同虚设。 */
-        run_recovery(full_reauth);
+         * 恢复内部失败触发的重启永远只等 5s，风暴兜底形同虚设。
+         * 恢复触发 = WiFi 掉线重连（快路径）/ CONNACK 拒绝（全量重认证）/ 监督超时（快路径）。 */
+        if (wifi_was_down || full_reauth || supervise_force)
+        {
+            mqttDownSince = 0; /* 每次恢复都会重建全新连接，断连计时重新开始 */
+            run_recovery(full_reauth);
+        }
     }
 }
