@@ -8,7 +8,7 @@
 # 本地不用 git 提交也能提前验证：
 #   - 只改 workflow 本身想试跑：安装 Docker 后用 act（命令见本文件末尾注释）。
 #   - 只验证代码能否编译：本机已有 IDF，`idf.py set-target esp32s3 && idf.py build`，
-#     与 CI 唯一差异是环境（IDF 版本由下面镜像 tag 锁定，与本机保持一致 v6.2）。
+#     与 CI 唯一差异是环境（CI 用 espressif/idf:latest 即 master 线，与本机同为 master/6.2.0-dev）。
 #
 # 若后续升级 IDF，只需同步改下面两处：container 镜像 tag 与下方注释说明。
 
@@ -33,9 +33,7 @@ jobs:
   build:
     name: Build firmware (esp32s3)
     runs-on: ubuntu-latest
-    # 官方预装 ESP-IDF v6.2 工具链的镜像；CI 内不依赖本机 IDF，保证环境一致。
-    # 版本与 dependencies.lock 中的 idf 6.2.0 对齐。
-    container: espressif/idf:release-v6.2
+    container: espressif/idf:release-v6.1
     steps:
       - uses: actions/checkout@v4
 
@@ -96,7 +94,7 @@ jobs:
   #   name: Build OTA app image for ${{ github.ref_name }}
   #   runs-on: ubuntu-latest
   #   if: startsWith(github.ref, 'refs/tags/v')
-  #   container: espressif/idf:release-v6.2
+  #   container: espressif/idf:latest   # v6.2 发版后改为 espressif/idf:v6.2
   #   steps:
   #     - uses: actions/checkout@v4
   #
