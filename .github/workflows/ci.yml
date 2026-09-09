@@ -1,26 +1,11 @@
-# ESP32-S3 firmware CI
-#
-# 触发方式：
-#   1. push / pull_request —— 常规自动触发
-#   2. workflow_dispatch —— 手动触发：GitHub 网页 Actions 页点 Run workflow，
-#      或 `gh workflow run ci.yml`。不需要改代码、不需要新提交即可验证流水线。
-#
-# 本地不用 git 提交也能提前验证：
-#   - 只改 workflow 本身想试跑：安装 Docker 后用 act（命令见本文件末尾注释）。
-#   - 只验证代码能否编译：本机已有 IDF，`idf.py set-target esp32s3 && idf.py build`，
-#     与 CI 唯一差异是环境（CI 用 espressif/idf:latest 即 master 线，与本机同为 master/6.2.0-dev）。
-#
-# 若后续升级 IDF，只需同步改下面两处：container 镜像 tag 与下方注释说明。
-
 name: CI
 
 on:
   push:
     branches: [master]
-    # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job。
-    # 与底部「OTA 发布」段一起启用：取消本处 tags 与下方 release-ota job 的注释。
-    tags:
-      - 'v*'
+    # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job（默认注释，未启用）。
+    # tags:
+    #   - 'v*'
   pull_request:
   workflow_dispatch:
 
@@ -36,6 +21,14 @@ jobs:
     container: espressif/idf:release-v6.1
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache IDF incremental build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: idf-build-esp32s3-${{ hashFiles('sdkconfig.defaults', 'dependencies.lock', '**/CMakeLists.txt', '**/idf_component.yml') }}
+          restore-keys: |
+            idf-build-esp32s3-
 
       # 组件管理器的下载产物缓存：同一份 dependencies.lock 只在首次跑时联网拉取。
       # 路径在 gitignore 内（managed_components/），不上库；放这里纯为加速与离线稳定。
@@ -94,9 +87,18 @@ jobs:
     name: Build OTA app image for ${{ github.ref_name }}
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    container: espressif/idf:latest   # v6.2 发版后改为 espressif/idf:v6.2
+    container: espressif/idf:release-v6.1   
     steps:
       - uses: actions/checkout@v4
+  
+      # 与 ci build job 同款增量缓存（tag 发版频率低，直接复用 build/ 缓存加速）。
+      - name: Cache IDF incremental build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: idf-build-esp32s3-${{ hashFiles('sdkconfig.defaults', 'dependencies.lock', '**/CMakeLists.txt', '**/idf_component.yml') }}
+          restore-keys: |
+            idf-build-esp32s3-
   
       - name: Build
         run: |
