@@ -132,6 +132,30 @@ static sensor_collect_fn collector_find(const char *type)
     return NULL;
 }
 
+/* --------------------------------------------------------------------------
+ * dataType 自检 — 采集器产物与云端定义 dataType 对齐（契约见 sensor.h 头注释
+ * 与 docs/mqtt-api.md 遥测章节）。平台按 dataType 校验上报值：float/int → number、
+ * bool → true/false、text/enum → 字符串，不符即丢弃；固件在源头做同规则自检，
+ * 不符则跳过该点并告警。定义未声明 dataType 或类型未知时不拦截
+ * （类型真源在平台，固件只做源头自检，不做 enum 枚举值校验）。
+ * -------------------------------------------------------------------------- */
+static bool value_matches_datatype(const cJSON *def, const cJSON *value)
+{
+    const cJSON *dt = cJSON_GetObjectItem(def, "dataType");
+    if (!cJSON_IsString(dt))
+        return true; /* 定义未声明 dataType：放行 */
+
+    if (strcmp(dt->valuestring, "float") == 0 ||
+        strcmp(dt->valuestring, "int") == 0)
+        return cJSON_IsNumber(value);
+    if (strcmp(dt->valuestring, "bool") == 0)
+        return cJSON_IsBool(value);
+    if (strcmp(dt->valuestring, "text") == 0 ||
+        strcmp(dt->valuestring, "enum") == 0)
+        return cJSON_IsString(value);
+    return true; /* 未知 dataType：类型真源在平台 */
+}
+
 bool sensor_init(void)
 {
     bool ok = internal_temp_init();
@@ -184,6 +208,14 @@ char *sensor_build_report(const char *config_json)
         cJSON *value = fn(def);
         if (value == NULL)
             continue; /* 本次采集失败 */
+
+        if (!value_matches_datatype(def, value))
+        {
+            ESP_LOGW(TAG, "sensor: 上报值类型与定义 dataType 不符，跳过 (id=%s, dataType=%s)",
+                     id->valuestring, cJSON_GetObjectItem(def, "dataType")->valuestring);
+            cJSON_Delete(value);
+            continue;
+        }
 
         cJSON *item = cJSON_CreateObject();
         cJSON_AddStringToObject(item, "name", id->valuestring);

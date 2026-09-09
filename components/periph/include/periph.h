@@ -24,7 +24,7 @@
  *
  *   {"id":"fan1","driver":"servo",            // driver 占位，忽略
  *    "enabled":true,
- *    "config":{"transport":"pwm","pin":18,"freq_hz":25000}}
+ *    "specs":{"transport":"pwm","pin":18,"freq_hz":25000}}
  *
  * 控制命令（type=control payload）：
  *   {"action":"fan1","value":{...}}   — action = 设备名 → ops->command
@@ -95,8 +95,8 @@ bool periph_device_add(const char *name, const char *transport,
 bool periph_device_remove(const char *name);
 
 /* 按云端执行器定义数组 diff 应用（配置快照的 "actuators" 分区）。
- * 每条定义 {"id","driver"(忽略),"config":{"transport":...},"enabled"}：
- *   - enabled==false / config 非对象 / 无 transport：从总线移除；
+ * 每条定义 {"id","driver"(忽略),"specs":{"transport":...},"enabled"}：
+ *   - enabled==false / specs 非对象 / 无 transport：从总线移除；
  *   - 不存在/参数变化：periph_device_add（新增或重配置，复用 probe）；
  * 全部定义处理完后，移除不在期望列表中的现存设备（单向收敛到期望态）。 */
 bool periph_apply_config(const cJSON *actuators);

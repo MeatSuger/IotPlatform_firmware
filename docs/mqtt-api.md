@@ -17,13 +17,13 @@
 设备端**不做器件语义假设**，一切由云端下发的物模型定义驱动：
 
 - **写入类设备**（继电器/风扇/舵机/灯带/DAC 等）→ 云端 `actuators[]` 定义，固件按其
-  `config.transport`（`gpio` / `pwm` / `spi` / `led_strip`）实例化硬件；控制命令
+  `specs.transport`（`gpio` / `pwm` / `spi` / `led_strip`）实例化硬件；控制命令
   `value` 下发**传输原语**（电平/占空比/脉宽/数据帧/颜色分量），角度、颜色等语义
   换算由云端完成。
 - **读取类设备**（温度/湿度等传感器）→ 云端 `sensors[]` 定义，固件按其 `type`
   匹配采集器读取并上报；`type` 无枚举限制（temperature/humidity/...）。
 - 后端 Actuator 的 `driver` 字段枚举固定（led/servo/speaker），固件**忽略该字段**，
-  仅作为后端占位；设备类型一律以 `config.transport` 为准。
+  仅作为后端占位；设备类型一律以 `specs.transport` 为准。
 - 命令无 ack 回执：控制为 fire-and-forget，最终状态经遥测/配置回执体现。
 
 ## 协议总览
@@ -54,33 +54,38 @@
 - `config.sensor.reportInterval`（秒）：传感器上报周期（默认 30s，范围 1–86400）
 - 其余分区（`network`/`camera`/`ota` 等）：设备当前不生效，但随 payload 原样持久化与回执
 
-### 执行器定义（actuators[]）— transport 由 config 自描述
+### 执行器定义（actuators[]）— transport 由 specs 自描述
+
+> **字段名统一（2026）**：后端驱动参数已由 `config` 改名为 `specs`
+> （与 Sensor 定义体同名，DB 列 params→specs）；下发为**裁剪版**
+> （仅 `id/driver/specs/enabled`，无 `name/createdAt/updatedAt`）；空 specs 省略
+> （无 transport 无法实例化，等价移除）。
 
 ```json
-{"id":"fan1","name":"风扇","driver":"servo","enabled":true,
- "config":{"transport":"pwm","pin":18,"freq_hz":25000}}
+{"id":"fan1","driver":"servo","enabled":true,
+ "specs":{"transport":"pwm","pin":18,"freq_hz":25000}}
 ```
 
 | 字段 | 说明 |
 |---|---|
 | `id` | 执行器标识符（`^[a-z][a-z0-9_]{0,10}$`）＝ 控制命令 `action` |
 | `driver` | 后端枚举占位（led/servo/speaker 三选一即可），**固件忽略** |
-| `config.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip`（固件注册表，可扩展） |
-| `config.*` | transport 参数（见下） |
+| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip`（固件注册表，可扩展） |
+| `specs.*` | transport 参数（见下） |
 | `enabled` | `false`（或缺省 true）→ 期望移除/不实例化 |
 
 固件处理规则（appcfg + periph diff 应用）：
 
 1. 新版本 → NVS 持久化（version/payload/rpending）→ 逐条 diff：
-   - 新增 → probe 实例化（按 config.transport 匹配驱动，引脚仲裁防冲突）
+   - 新增 → probe 实例化（按 specs.transport 匹配驱动，引脚仲裁防冲突）
    - transport/参数变化 → 重配置（remove 旧绑定 → 重新 probe）
-   - `enabled=false`、config 非对象或缺失 `transport` → 移除
+   - `enabled=false`、specs 非对象或缺失 `transport` → 移除
 2. 已应用版本重投（retained/重连）→ 幂等忽略；回执未发出则补发
 3. 重启 → `appcfg_replay()` 从 NVS 重放（不等云端推送）
 
 各 transport 参数与命令原语：
 
-| transport | config 参数 | 控制命令 value | 说明 |
+| transport | specs 参数 | 控制命令 value | 说明 |
 |---|---|---|---|
 | `gpio` | `pin` 必填；`active_high` 默认 true；`initial` 默认 0 | `{"level":1}` / `{"level":0}` / `{"toggle":true}` | 数字输出；逻辑电平按 active_high 映射物理电平 |
 | `pwm` | `pin` 必填；`freq_hz` 默认 1000 | `{"duty":80}`（0-100%）/ `{"pulse_us":1500}` | LEDC 输出；通道按引脚自动分配、timer 按频率共享；分辨率按频率自动推导 |
@@ -133,8 +138,19 @@
 
 按 `config.sensor.reportInterval`（秒）周期发布。**上报内容由云端 `sensors[]` 定义驱动**：
 
+> 下发为**裁剪版**（仅 `id/type/dataType/unit/specs/reportInterval/enabled`，
+> 无 `name/createdAt/updatedAt`；空 specs / 继承全局周期的 reportInterval 省略）。
+> 传感器级 `specs` 为统一定义体：量程 `min/max/step`、枚举 `values`、文本 `maxLen`、
+> 告警阈值 `thresholds{min,max,…}` 与自由扩展键平铺于同一对象（原顶层
+> `thresholds`/`attrs` 已并入）。固件采集器仅需 `id/type/enabled/dataType`。
+
+> **上报值类型对齐**：平台按定义 `dataType` 校验上报值——`float/int` 必须为 number、
+> `bool` 必须为 true/false、`text`/`enum` 必须为字符串（enum 还须在 `specs.values`
+> 内）；类型不符的数据点会被平台**丢弃**。固件采集器产物须与 dataType 匹配
+> （sensor.c 已有源头自检），例如 bool 开关要产出 `true/false` 而非 0/1。
+
 ```json
-// 云端定义: {"sensors":[{"id":"temp1","name":"温度","type":"temperature","dataType":"float","enabled":true}]}
+// 云端定义（下发裁剪版）: {"sensors":[{"id":"temp1","type":"temperature","dataType":"float","enabled":true}]}
 // 设备上报:
 {"sensors":[{"name":"temp1","type":"temperature","value":26.32}]}
 ```
@@ -154,7 +170,7 @@
 
 ## 完整流程示例
 
-1. 平台：`POST /actuators` 创建执行器定义（driver 占位，config.transport=pwm → 风扇）
+1. 平台：`POST /actuators` 创建执行器定义（driver 占位，specs.transport=pwm → 风扇）
 2. 平台：`POST /actuators/apply` → version+1 配置下发（MQTT retained + 命令队列）
 3. 设备：订阅即收到 → NVS 持久化 → periph 按 transport 实例化 → 回执 `config/report` → 云端 `acked`
 4. 平台：`POST /sensors/apply` → 设备按 type=temperature 采集并周期上报遥测

@@ -14,6 +14,10 @@ typedef struct cJSON cJSON;
  *
  * 固件侧“读取类”设备按 type 注册采集器（temperature → ESP32 内部温度，
  * 未来 i2c/spi 等读类器件按需注册新采集器）；固件不做器件语义换算。
+ *
+ * 类型对齐：平台按定义 dataType 校验上报值（float/int=number、bool=布尔、
+ * text/enum=字符串），类型不符的数据点会被平台丢弃；固件在源头自检——
+ * 采集器产物与 dataType 不符时跳过该点并告警（见 value_matches_datatype）。
  * -------------------------------------------------------------------------- */
 
 /* 采集器：def 为云端 sensors[] 单条定义（含 id/type/enabled/...）。

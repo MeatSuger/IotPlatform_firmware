@@ -13,7 +13,7 @@
  *   WS2812_LED_COUNT  — default LED count when config omits "count".
  *
  * Device config:
- *   {"transport":"led_strip","config":{"gpio":48,"count":1}}
+ *   {"transport":"led_strip","specs":{"gpio":48,"count":1}}
  * Control command (value 原语：rgb 数组作用于全部灯珠)：
  *   {"action":"led1","value":{"rgb":[255,0,0]}}
  * -------------------------------------------------------------------------- */

@@ -179,8 +179,11 @@ bool periph_device_remove(const char *name)
 /* --------------------------------------------------------------------------
  * 期望配置 diff 应用（DeviceConfig.payload.actuators）
  *
- * 设备类型（transport: gpio/pwm/spi/led_strip/...）由定义 config.transport
+ * 设备类型（transport: gpio/pwm/spi/led_strip/...）由定义 specs.transport
  * 决定；新增传输只需在固件注册表加驱动，云端/后端无需改动。
+ *
+ * 字段名统一（2026）：后端驱动参数已由 config 改名为 specs
+ * （与 Sensor 定义体同名，DB 列 params→specs），本处同步读取 specs。
  * -------------------------------------------------------------------------- */
 
 /* id 是否出现在期望启用列表中 */
@@ -212,7 +215,7 @@ bool periph_apply_config(const cJSON *actuators)
     cJSON_ArrayForEach(item, actuators)
     {
         cJSON *id = cJSON_GetObjectItem(item, "id");
-        cJSON *cfg = cJSON_GetObjectItem(item, "config");
+        cJSON *cfg = cJSON_GetObjectItem(item, "specs");
         cJSON *enabled = cJSON_GetObjectItem(item, "enabled");
 
         if (!cJSON_IsString(id) || strlen(id->valuestring) == 0 ||
@@ -241,11 +244,11 @@ bool periph_apply_config(const cJSON *actuators)
             continue;
         }
 
-        /* 设备类型 = config.transport（driver 字段为后端枚举占位，忽略） */
+        /* 设备类型 = specs.transport（driver 字段为后端枚举占位，忽略） */
         cJSON *transport = cJSON_GetObjectItem(cfg, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring[0] == '\0')
         {
-            ESP_LOGW(TAG, "periph: 执行器 '%s' 缺少 config.transport，移除",
+            ESP_LOGW(TAG, "periph: 执行器 '%s' 缺少 specs.transport，移除",
                           name);
             periph_device_remove(name);
             all_ok = false;

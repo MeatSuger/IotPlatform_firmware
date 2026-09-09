@@ -60,7 +60,7 @@ void sensorReportTask(void *pvParameters)
  * cmdProcessTask — Core 1 出队并分发后端消息。
  *
  * 执行器定义唯一真源为云端配置快照（appcfg → periph_apply_config）；
- * 设备类型（transport）由定义 config.transport 决定，命令 value 为传输原语
+ * 设备类型（transport）由定义 specs.transport 决定，命令 value 为传输原语
  * （云端负责角度/颜色等语义换算）。本任务只做分发：
  *   1. 配置快照（version+config）→ appcfg_handle_config
  *   2. 控制命令（action = 执行器 id）→ periph_dispatch

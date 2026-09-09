@@ -184,7 +184,7 @@ bool mqtt_publish(const char *topic, const char *payload, size_t len)
     int msg_id = esp_mqtt_client_publish(client, topic, payload, len, 0, 0);
     if (msg_id >= 0)
     {
-        ESP_LOGD(TAG, "MQTT published [msg_id=%d] to %s: %.*s",
+        ESP_LOGI(TAG, "MQTT published [msg_id=%d] to %s: %.*s",
                     msg_id, topic, (int)(len > 200 ? 200 : len), payload);
         return true;
     }
