@@ -4,8 +4,8 @@ on:
   push:
     branches: [master]
     # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job（默认注释，未启用）。
-    # tags:
-    #   - 'v*'
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
