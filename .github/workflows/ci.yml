@@ -19,8 +19,8 @@ on:
     branches: [master]
     # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job。
     # 与底部「OTA 发布」段一起启用：取消本处 tags 与下方 release-ota job 的注释。
-    # tags:
-    #   - 'v*'
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
@@ -90,31 +90,31 @@ jobs:
 # "Read and write permissions"（release-ota 要往 Release 写资产）。
 # ===========================================================================
 
-  # release-ota:
-  #   name: Build OTA app image for ${{ github.ref_name }}
-  #   runs-on: ubuntu-latest
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   container: espressif/idf:latest   # v6.2 发版后改为 espressif/idf:v6.2
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Build
-  #       run: |
-  #         export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
-  #         . "$IDF_PATH/export.sh"
-  #         idf.py set-target esp32s3
-  #         idf.py build
-  #
-  #     # 重命名为带版本的 OTA 负载（Release 资产名）。
-  #     - name: Rename OTA image
-  #       run: |
-  #         cp build/firmware.bin build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
-  #
-  #     # 挂到 tag 对应的 GitHub Release（不存在 Release 时会自动创建）。
-  #     - name: Attach to GitHub Release
-  #       uses: softprops/action-gh-release@v2
-  #       with:
-  #         files: build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
+  release-ota:
+    name: Build OTA app image for ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    container: espressif/idf:latest   # v6.2 发版后改为 espressif/idf:v6.2
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Build
+        run: |
+          export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py build
+  
+      # 重命名为带版本的 OTA 负载（Release 资产名）。
+      - name: Rename OTA image
+        run: |
+          cp build/firmware.bin build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
+  
+      # 挂到 tag 对应的 GitHub Release（不存在 Release 时会自动创建）。
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
 
 # ---------------------------------------------------------------------------
 # 不用提交代码的本地试跑方式（可选）
