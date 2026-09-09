@@ -1,0 +1,135 @@
+# ESP32-S3 firmware CI
+#
+# 触发方式：
+#   1. push / pull_request —— 常规自动触发
+#   2. workflow_dispatch —— 手动触发：GitHub 网页 Actions 页点 Run workflow，
+#      或 `gh workflow run ci.yml`。不需要改代码、不需要新提交即可验证流水线。
+#
+# 本地不用 git 提交也能提前验证：
+#   - 只改 workflow 本身想试跑：安装 Docker 后用 act（命令见本文件末尾注释）。
+#   - 只验证代码能否编译：本机已有 IDF，`idf.py set-target esp32s3 && idf.py build`，
+#     与 CI 唯一差异是环境（IDF 版本由下面镜像 tag 锁定，与本机保持一致 v6.2）。
+#
+# 若后续升级 IDF，只需同步改下面两处：container 镜像 tag 与下方注释说明。
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+    # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job。
+    # 与底部「OTA 发布」段一起启用：取消本处 tags 与下方 release-ota job 的注释。
+    # tags:
+    #   - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+# 手动反复调流水线时，同一分支/PR 的新一次运行会取消仍在跑的旧运行，省排队时间。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build firmware (esp32s3)
+    runs-on: ubuntu-latest
+    # 官方预装 ESP-IDF v6.2 工具链的镜像；CI 内不依赖本机 IDF，保证环境一致。
+    # 版本与 dependencies.lock 中的 idf 6.2.0 对齐。
+    container: espressif/idf:release-v6.2
+    steps:
+      - uses: actions/checkout@v4
+
+      # 组件管理器的下载产物缓存：同一份 dependencies.lock 只在首次跑时联网拉取。
+      # 路径在 gitignore 内（managed_components/），不上库；放这里纯为加速与离线稳定。
+      - name: Cache managed components
+        uses: actions/cache@v4
+        with:
+          path: managed_components
+          key: managed-components-${{ hashFiles('dependencies.lock') }}
+          restore-keys: |
+            managed-components-
+
+      # 镜像通常已把 IDF_PATH 指向 /opt/esp/idf；此处兜底再显式 export。
+      - name: Build
+        run: |
+          export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py build
+
+      # 产物为可烧录文件（烧录用 flash/download 页能直接按 flasher_args 取）。
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32s3
+          path: |
+            build/firmware.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/flasher_args.json
+          if-no-files-found: error
+          retention-days: 14
+
+# ===========================================================================
+# OTA 发布 job（默认注释，验证主流水线稳定后再启用）
+#
+# 启用方法：
+#   1. 把本文件顶部 on.push 里的 `tags: ['v*']` 取消注释；
+#   2. 把下方整个 release-ota job 每行开头的 `# ` 去掉。
+#   3. 推送 v1.2.3 形式的标签：`git tag v1.2.3 && git push origin v1.2.3`
+#
+# 语义说明：
+#   - 分区表是内置 two_ota_large（16MB 双 OTA 槽），idf.py build 产出的
+#     build/firmware.bin 就是可直接下发 OTA 的 app 镜像，无需二次加工；
+#   - 与 ci build job 复用同一份 sdkconfig.defaults，tag 上独立重编一次，
+#     保证发布镜像只来自 tag 时刻的代码（不信任缓存）；
+#   - app 镜像按版本改名后作为 Release 资产，取用路径固定为
+#     release/<tag>/firmware-ota-esp32s3-vX.Y.Z.bin。
+#   - 若你的平台 OTA 需要的是 GitHub 之外的产物（如手动上传到平台服务端），
+#     可把下方上传步骤换成 actions/upload-artifact，二者择一。
+#
+# 注意：启用后需要仓库 Settings -> Actions -> General 里勾选
+# "Read and write permissions"（release-ota 要往 Release 写资产）。
+# ===========================================================================
+
+  # release-ota:
+  #   name: Build OTA app image for ${{ github.ref_name }}
+  #   runs-on: ubuntu-latest
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   container: espressif/idf:release-v6.2
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Build
+  #       run: |
+  #         export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
+  #         . "$IDF_PATH/export.sh"
+  #         idf.py set-target esp32s3
+  #         idf.py build
+  #
+  #     # 重命名为带版本的 OTA 负载（Release 资产名）。
+  #     - name: Rename OTA image
+  #       run: |
+  #         cp build/firmware.bin build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
+  #
+  #     # 挂到 tag 对应的 GitHub Release（不存在 Release 时会自动创建）。
+  #     - name: Attach to GitHub Release
+  #       uses: softprops/action-gh-release@v2
+  #       with:
+  #         files: build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
+
+# ---------------------------------------------------------------------------
+# 不用提交代码的本地试跑方式（可选）
+#
+# A. act（完整模拟本 workflow，含解析 yaml，需要 Docker）：
+#      docker --version                 # 先确认 Docker 已装
+#      act -W .github/workflows/ci.yml  # 在仓库根目录执行
+#
+# B. 只验证编译（不装 Docker，用本机 IDF，与 CI 逻辑等价）：
+#      . <你的 idf export.sh>           # 例如 . ~/.espressif/master/esp-idf/export.sh
+#      idf.py set-target esp32s3 && idf.py build
+#
+# C. 推到 GitHub 后手动触发（无需新提交）：
+#      gh workflow run ci.yml --ref master
+#      gh run watch
+# ---------------------------------------------------------------------------
