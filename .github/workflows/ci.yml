@@ -1,16 +1,33 @@
+# ESP32-S3 firmware CI
+#
+# 触发方式：
+#   1. push master / pull_request —— 常规自动触发（只编译，不发布）
+#   2. push v 开头 tag（v1.2.3）—— 编译 + 生成 OTA 镜像挂到 GitHub Release
+#   3. workflow_dispatch —— 手动触发（选 master 只编译；选已推送的 tag ref 才会发布 OTA）
+#
+# 说明：GitHub 托管 runner 是临时虚拟机，每次 run 都要整包拉取
+#   espressif/idf 镜像（~4-5GB），无法跨 run 保留 —— 这是托管 runner 的天花板。
+#   因此 OTA 步骤并入 build job，保证单次 run 只拉一次镜像、只编译一次。
+#   若仍嫌拉镜像慢，见文件底部方案 D（自建 runner）与 E（docker save/load 缓存）。
+#
+# 本地不用 git 提交也能提前验证：
+#   - 只改 workflow 本身想试跑：安装 Docker 后用 act（命令见文件底部）。
+#   - 只验证代码能否编译：本机 IDF `idf.py set-target esp32s3 && idf.py build`。
+#     注意：CI 用稳定版 espressif/idf:release-v6.1，本机是 master(6.2.0-dev)，两者不是同一线；
+#     代码若用了 6.2 新增 API，CI(6.1) 会报错。待 v6.2.0 发版后改 tag 为 v6.2 对齐。
+
 name: CI
 
 on:
   push:
     branches: [master]
-    # OTA 触发源：推送 v 开头 tag（如 v1.2.3）时跑下方 release-ota job。
-    # 注意：tag 必须指向包含本 ci.yml 的提交，否则跑的是旧配置；tag 名必须以 v 开头。
+    # OTA 触发源：v 开头 tag（如 v1.2.3）。tag 必须指向包含本文件的提交，否则 Actions 执行旧配置。
     tags:
       - 'v*'
   pull_request:
   workflow_dispatch:
 
-# 手动反复调流水线时，同一分支/PR 的新一次运行会取消仍在跑的旧运行，省排队时间。
+# 同一分支/ref 的新运行会取消仍在跑的旧运行，省排队时间。
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -19,10 +36,18 @@ jobs:
   build:
     name: Build firmware (esp32s3)
     runs-on: ubuntu-latest
+    # 稳定版 IDF：头文件不每天漂移，增量缓存才稳定命中。
     container: espressif/idf:release-v6.1
+    # tag 时需要 softprops 写 Release；非 tag 运行无副作用。
+    # PR（尤其 fork PR）的 token 由 GitHub 自动降权，不受此影响。
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
+      # —— 增量编译缓存 ——
+      # 缓存整个 build/（.ninja_deps/.ninja_log/CMakeCache/全部 .o），下次只重编改动文件。
+      # key 只用构建配置类文件计算：源码提交不换 key → restore-keys 命中上次缓存 → 增量编译。
       - name: Cache IDF incremental build
         uses: actions/cache@v4
         with:
@@ -31,8 +56,7 @@ jobs:
           restore-keys: |
             idf-build-esp32s3-
 
-      # 组件管理器的下载产物缓存：同一份 dependencies.lock 只在首次跑时联网拉取。
-      # 路径在 gitignore 内（managed_components/），不上库；放这里纯为加速与离线稳定。
+      # 组件管理器下载产物缓存：同 lock 只在首次跑联网拉取。
       - name: Cache managed components
         uses: actions/cache@v4
         with:
@@ -41,7 +65,7 @@ jobs:
           restore-keys: |
             managed-components-
 
-      # 镜像通常已把 IDF_PATH 指向 /opt/esp/idf；此处兜底再显式 export。
+      # 镜像已把 IDF_PATH 指向 /opt/esp/idf，此处兜底再 export。
       - name: Build
         run: |
           export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
@@ -49,7 +73,7 @@ jobs:
           idf.py set-target esp32s3
           idf.py build
 
-      # 产物为可烧录文件（烧录用 flash/download 页能直接按 flasher_args 取）。
+      # 常规构建产物（含 firmware.bin —— 它本身就是可 OTA 的 app 镜像，供平台侧取用）。
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -62,62 +86,19 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-# ===========================================================================
-# OTA 发布 job（已启用）
-#
-# 触发：仅当推送 v 开头 tag（refs/tags/v*）时运行；
-#   master 提交 / PR / 手动触发（ref=分支）时此 job 会显示 skipped —— 这是设计行为，不是故障。
-#   ✓ git tag v1.2.3 && git push origin v1.2.3
-#   ✓ 想验证不写代码提交：tag 先推一次，之后 gh workflow run ci.yml --ref v1.2.3
-#   ✗ 手动 Run workflow 选 master 分支 → OTA 必跳过（请把 ref 选成 tag）
-#   ✗ tag 名不是 v 开头（如 1.2.3）→ 不触发
-#   ✗ tag 指向的提交早于本配置 → Actions 会执行旧版 ci.yml，看不到此 job
-#
-# 语义：
-#   - 分区表 two_ota_large（16MB 双 OTA 槽），idf.py build 产出的 build/firmware.bin
-#     就是可下发 OTA 的 app 镜像，无需二次加工；
-#   - 在 tag 时刻的代码上独立重编一次，产物挂到该 tag 的 GitHub Release：
-#     release/<tag>/firmware-ota-esp32s3-vX.Y.Z.bin
-#   - 若平台 OTA 需要的是普通构建产物而非 GitHub Release，把 Attach 步骤换成
-#     actions/upload-artifact 即可，二者择一。
-#
-# 权限：job 级已声明 contents: write（softprops 往 Release 写资产），
-#   无需仓库 Settings -> Actions -> General 的全局读写开关。
-# ===========================================================================
-
-  release-ota:
-    name: Build OTA app image for ${{ github.ref_name }}
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    container: espressif/idf:release-v6.1
-    steps:
-      - uses: actions/checkout@v4
-  
-      # 与 ci build job 同款增量缓存（tag 发版频率低，直接复用 build/ 缓存加速）。
-      - name: Cache IDF incremental build
-        uses: actions/cache@v4
-        with:
-          path: build
-          key: idf-build-esp32s3-${{ hashFiles('sdkconfig.defaults', 'dependencies.lock', '**/CMakeLists.txt', '**/idf_component.yml') }}
-          restore-keys: |
-            idf-build-esp32s3-
-  
-      - name: Build
-        run: |
-          export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
-          . "$IDF_PATH/export.sh"
-          idf.py set-target esp32s3
-          idf.py build
-  
-      # 重命名为带版本的 OTA 负载（Release 资产名）。
+      # ---- tag 专属：OTA 发布 ----
+      # 仅 refs/tags/v* 推送时执行（分区 two_ota_large，firmware.bin 即 OTA 负载）；
+      # master 提交 / PR / 手动选 master 时这两步自动跳过（显示 skipped 属正常）。
+      # 验证 OTA 免提交：gh workflow run ci.yml --ref <已推送的tag>
       - name: Rename OTA image
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           cp build/firmware.bin build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
-  
-      # 挂到 tag 对应的 GitHub Release（不存在 Release 时会自动创建）。
+
+      # 挂到 tag 对应 Release（不存在会自动创建）。
+      # 重跑同一 tag 若资产已存在会报重复：删除 Release 或换新 tag 再推。
       - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: build/firmware-ota-esp32s3-${{ github.ref_name }}.bin
@@ -125,15 +106,28 @@ jobs:
 # ---------------------------------------------------------------------------
 # 不用提交代码的本地试跑方式（可选）
 #
-# A. act（完整模拟本 workflow，含解析 yaml，需要 Docker）：
+# A. act（完整模拟 workflow，需要 Docker）：
 #      docker --version                 # 先确认 Docker 已装
-#      act -W .github/workflows/ci.yml  # 在仓库根目录执行
+#      act -W .github/workflows/ci.yml  # 仓库根目录执行
 #
-# B. 只验证编译（不装 Docker，用本机 IDF，与 CI 逻辑等价）：
+# B. 只验证编译（不装 Docker，用本机 IDF）：
 #      . <你的 idf export.sh>           # 例如 . ~/.espressif/master/esp-idf/export.sh
 #      idf.py set-target esp32s3 && idf.py build
 #
-# C. 推到 GitHub 后手动触发（无需新提交）：
-#      gh workflow run ci.yml --ref master
-#      gh run watch
+# C. 推到 GitHub 后手动触发（无需新代码提交）：
+#      gh workflow run ci.yml --ref master          # 只编译
+#      gh workflow run ci.yml --ref v1.2.3          # 编译 + 发布 OTA（tag 须已推送）
+#
+# D. 自建 runner（彻底解决“每次拉镜像”，需一台常开机器）：
+#      - 机器上装 Docker；首次跑自动拉镜像后即缓存在本机，之后不再从零拉取；
+#      - 或不用容器、直接在本机 IDF 环境跑（需把 container 换成原生环境，见方案说明）；
+#      - 步骤：仓库 Settings -> Actions -> Runners -> New self-hosted runner，
+#        按提示下载并 ./config.sh --url <repo> --token <token> && ./run.sh；
+#        把上面 runs-on 改为 self-hosted 即可；注意该机器需保持在线。
+#
+# E. 托管 runner + 镜像缓存（仍用 GitHub 机器，改从 actions/cache 装载镜像）：
+#      把 job 从 container: 改成普通 ubuntu 步骤：
+#        1) 首次跑 docker pull + docker save | gzip 存入 cache；
+#        2) 之后跑 docker load 从 cache 恢复（通常比 5GB 从 Docker Hub 拉快且稳）；
+#      代价：docker save/load 文件 ~4-5GB 吃磁盘/带宽，ubuntu-latest 剩余磁盘较紧，需裁剪。
 # ---------------------------------------------------------------------------
