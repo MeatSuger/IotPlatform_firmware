@@ -3,7 +3,8 @@ name: CI
 on:
   push:
     branches: [master]
-    # OTA 发版触发源：推送 vX.Y.Z 标签时跑 release-ota job（默认注释，未启用）。
+    # OTA 触发源：推送 v 开头 tag（如 v1.2.3）时跑下方 release-ota job。
+    # 注意：tag 必须指向包含本 ci.yml 的提交，否则跑的是旧配置；tag 名必须以 v 开头。
     tags:
       - 'v*'
   pull_request:
@@ -62,32 +63,35 @@ jobs:
           retention-days: 14
 
 # ===========================================================================
-# OTA 发布 job（默认注释，验证主流水线稳定后再启用）
+# OTA 发布 job（已启用）
 #
-# 启用方法：
-#   1. 把本文件顶部 on.push 里的 `tags: ['v*']` 取消注释；
-#   2. 把下方整个 release-ota job 每行开头的 `# ` 去掉。
-#   3. 推送 v1.2.3 形式的标签：`git tag v1.2.3 && git push origin v1.2.3`
+# 触发：仅当推送 v 开头 tag（refs/tags/v*）时运行；
+#   master 提交 / PR / 手动触发（ref=分支）时此 job 会显示 skipped —— 这是设计行为，不是故障。
+#   ✓ git tag v1.2.3 && git push origin v1.2.3
+#   ✓ 想验证不写代码提交：tag 先推一次，之后 gh workflow run ci.yml --ref v1.2.3
+#   ✗ 手动 Run workflow 选 master 分支 → OTA 必跳过（请把 ref 选成 tag）
+#   ✗ tag 名不是 v 开头（如 1.2.3）→ 不触发
+#   ✗ tag 指向的提交早于本配置 → Actions 会执行旧版 ci.yml，看不到此 job
 #
-# 语义说明：
-#   - 分区表是内置 two_ota_large（16MB 双 OTA 槽），idf.py build 产出的
-#     build/firmware.bin 就是可直接下发 OTA 的 app 镜像，无需二次加工；
-#   - 与 ci build job 复用同一份 sdkconfig.defaults，tag 上独立重编一次，
-#     保证发布镜像只来自 tag 时刻的代码（不信任缓存）；
-#   - app 镜像按版本改名后作为 Release 资产，取用路径固定为
-#     release/<tag>/firmware-ota-esp32s3-vX.Y.Z.bin。
-#   - 若你的平台 OTA 需要的是 GitHub 之外的产物（如手动上传到平台服务端），
-#     可把下方上传步骤换成 actions/upload-artifact，二者择一。
+# 语义：
+#   - 分区表 two_ota_large（16MB 双 OTA 槽），idf.py build 产出的 build/firmware.bin
+#     就是可下发 OTA 的 app 镜像，无需二次加工；
+#   - 在 tag 时刻的代码上独立重编一次，产物挂到该 tag 的 GitHub Release：
+#     release/<tag>/firmware-ota-esp32s3-vX.Y.Z.bin
+#   - 若平台 OTA 需要的是普通构建产物而非 GitHub Release，把 Attach 步骤换成
+#     actions/upload-artifact 即可，二者择一。
 #
-# 注意：启用后需要仓库 Settings -> Actions -> General 里勾选
-# "Read and write permissions"（release-ota 要往 Release 写资产）。
+# 权限：job 级已声明 contents: write（softprops 往 Release 写资产），
+#   无需仓库 Settings -> Actions -> General 的全局读写开关。
 # ===========================================================================
 
   release-ota:
     name: Build OTA app image for ${{ github.ref_name }}
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    container: espressif/idf:release-v6.1   
+    permissions:
+      contents: write
+    container: espressif/idf:release-v6.1
     steps:
       - uses: actions/checkout@v4
   
