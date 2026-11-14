@@ -9,13 +9,23 @@ ESP32-S3 设备固件，基于 ESP-IDF 构建，支持 WiFi 联网、MQTT 双向
 | MCU | ESP32-S3 |
 | SDK | ESP-IDF v6.0 |
 | 构建 | CMake |
+| 配网 | SmartConfig（ESP-Touch / AirKiss） |
 | MQTT | espressif/mqtt |
 | JSON | cJSON |
 | LED | led_strip (WS2812) |
 
 ## 功能
 
-- WiFi 配网与自动重连
+- **SmartConfig 配网**：首次上电（NVS 无“已配网”标记）进入配网模式；手机连上
+  目标 2.4G WiFi 后用 ESP-Touch / AirKiss 应用广播 SSID/密码即可完成配网，凭据
+  自动持久化，后续上电直连（重新配网：上电拉低 `GPIO4` 工厂复位，或
+  `idf.py -p PORT erase-flash`）
+- **工厂复位**：上电时 `GPIO4`（内部上拉，悬空不复位）被拉低 → 擦除整个 NVS 分区
+  （WiFi 凭据与已配网标记、设备 Token、云端配置快照/版本/待回执标志）并自动重启
+  回到配网流程；墨水屏图片存于独立 FAT 分区不受影响。引脚定义与选型约束见
+  `components/core/include/config.h`（不得选 strapping 引脚 GPIO0/3/45/46，否则
+  拉低会改变启动行为）
+- WiFi 自动重连（已配网后）
 - MQTT 连接 IoT 平台（设备注册 / 数据上报 / 下行命令接收）
 - 传感器数据采集（温度等）
 - LED 状态指示
@@ -38,6 +48,8 @@ firmware/
 │   ├── appcfg/                 # 配置快照状态机（NVS 持久化/version 幂等/回执/重启重放）
 │   ├── periph/                 # 声明式外设总线（device/driver 模型）：按执行器定义
 │   │                           #   config.transport(gpio/pwm/spi/led_strip) 实例化，引脚仲裁
+│   │                           #   + 板载墨水屏驱动 transport=epd（JD79665，见 epd.h）
+│   ├── img/                    # 图片接收：控制帧 + 二进制分片 → FatFS(/fatfs) → 墨水屏刷屏
 │   └── app/                    # 应用运行时（周期上报/命令分发任务 + 传感器按 type 采集器上报）
 ├── managed_components/         # 第三方组件（component manager 自动拉取，勿手改）
 ├── dependencies.lock           # 组件版本锁定
