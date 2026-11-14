@@ -5,6 +5,7 @@ idf_component_register(
     REQUIRES
         core
         net
+        img
         espressif__mqtt
         mbedtls
 )

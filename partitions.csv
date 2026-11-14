@@ -1,13 +1,25 @@
 # ESP-IDF partition table — 16 MB flash layout (ESP32-S3-WROOM-1-N16R8).
 #
-# factory: 15.9 MB app partition @ 0x10000, fills up to 0x1000000 (end of
-# 16 MB flash). Firmware image is ~1 MB, so ~15 MB headroom is left for
-# more peripherals / firmware growth.
+# 在 IDF 自带 partitions_two_ota_large.csv 的布局上追加了一块 FAT 数据分区
+# （label = "storage"），供图片接收模块（components/img）落盘刷屏：
+#   - nvs / otadata / phy_init / ota_0 / ota_1 的偏移与尺寸与原表完全一致，
+#     已部署设备的 OTA data 与 NVS 不受影响；
+#   - storage 位于两个 OTA 槽之后，带磨损均衡挂载到 /fatfs（见 fatfs_store.c）。
 #
-# If OTA (ota_0/ota_1) or a data partition (storage) is needed later,
-# shrink `factory` and add the new partitions here (align to 0x10000).
+# 16 MB 空间分配：
+#   0x000000 - 0x008000  bootloader
+#   0x008000 - 0x009000  partition table
+#   0x009000 - 0x00F000  nvs        (24K)
+#   0x00F000 - 0x011000  otadata    (8K)
+#   0x011000 - 0x012000  phy_init   (4K)
+#   0x020000 - 0x1C9000  ota_0      (1700K)
+#   0x1D0000 - 0x379000  ota_1      (1700K)
+#   0x380000 - 0x1000000 storage    (12.5M, FAT)
 
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0xFF0000,
+otadata,  data, ota,     0xf000,   0x2000,
+phy_init, data, phy,     0x11000,  0x1000,
+ota_0,    app,  ota_0,   0x20000,  1700K,
+ota_1,    app,  ota_1,   0x1d0000, 1700K,
+storage,  data, fat,     0x380000, 0xC80000,

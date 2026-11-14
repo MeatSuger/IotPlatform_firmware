@@ -6,17 +6,14 @@
 #include "common.h"
 #include "esp_log.h"
 #include "token.h"
-#include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
+#include "img_recv.h"       /* 图片接收（MQTT 直传 → FatFS → 墨水屏） */
+#include "esp_crt_bundle.h" /* IDF bundled CA bundle */
 
-/* esp-mqtt 组件内部 ESP_EVENT_DEFINE_BASE(MQTT_EVENTS)，但未在 public header 导出，
- * 这里按 esp_event 惯例自行声明，用于在回调里校验 event base。 */
+/* esp-mqtt 未在 public header 导出 MQTT_EVENTS base，按惯例自行声明以校验 event base */
 ESP_EVENT_DECLARE_BASE(MQTT_EVENTS);
 
 static const char *TAG = "mqtt";
 
-/* --------------------------------------------------------------------------
- * mqtt_event_handler — callback for esp_mqtt_client events
- * -------------------------------------------------------------------------- */
 static bool topic_matches(size_t topic_len, const char *topic,
                           const char *wanted)
 {
@@ -25,6 +22,44 @@ static bool topic_matches(size_t topic_len, const char *topic,
            strncmp(topic, wanted, wanted_len) == 0;
 }
 
+/* 图片接收：img/ctl 控制帧 / img/data 二进制分片分流给 img 组件——合并成一条靠首字节
+ * 猜类型，会因位图分片恰以 '{' 开头而丢整片；broker 分片按 offset/total 重组后交付。 */
+static char s_img_rx[MQTT_BUFFER_SIZE];
+static int s_img_rx_len;
+
+static void img_mqtt_handle(esp_mqtt_event_handle_t event)
+{
+    const bool is_ctl =
+        topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_CTL);
+    const bool is_data =
+        topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_DATA);
+
+    if (event->current_data_offset == 0)
+        s_img_rx_len = 0;
+
+    if (s_img_rx_len + event->data_len > (int)sizeof(s_img_rx))
+    {
+        ESP_LOGE(TAG, "img rx overflow (%d + %d), drop",
+                      s_img_rx_len, event->data_len);
+        s_img_rx_len = 0;
+        return;
+    }
+    memcpy(s_img_rx + s_img_rx_len, event->data, event->data_len);
+    s_img_rx_len += event->data_len;
+
+    if (event->current_data_offset + event->data_len < event->total_data_len)
+        return;
+
+    if (is_ctl)
+        img_recv_handle(IMG_FRAME_TEXT, (const uint8_t *)s_img_rx, s_img_rx_len);
+    else if (is_data)
+        img_recv_handle(IMG_FRAME_BINARY, (const uint8_t *)s_img_rx, s_img_rx_len);
+
+    s_img_rx_len = 0;
+}
+
+/* esp-mqtt 内部 auto-reconnect 是静默行为（无事件上抛），卡死时应用层收不到任何信号，
+ * 只能由 app_main 主循环监督兜底（毁旧建新）——本模块独立存在的原因之一。 */
 static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
                                int32_t event_id, void *event_data)
@@ -43,21 +78,25 @@ static void mqtt_event_handler(void *handler_args,
         if (g_wifiEventGroup != NULL)
             xEventGroupClearBits(g_wifiEventGroup, MQTT_AUTH_REFUSED_BIT); /* broker 接受了凭证 */
 
-        /* Subscribe QoS1：实时命令/离线后 HTTP 兜底 */
+        /* cmd：QoS1 非 retained，实时命令 + 离线后 HTTP 兜底 */
         esp_mqtt_client_subscribe(client, MQTT_TOPIC_CMD, 1);
         ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CMD);
 
-        /* Subscribe QoS1：订阅即收到 retained 最新配置快照 */
+        /* config：retained，订阅即收到最新配置快照 */
         esp_mqtt_client_subscribe(client, MQTT_TOPIC_CONFIG, 1);
         ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CONFIG);
+
+        /* img 分片：QoS0（大块二进制不重传，避免 broker 堆积） */
+        esp_mqtt_client_subscribe(client, MQTT_TOPIC_IMG_CTL, 0);
+        esp_mqtt_client_subscribe(client, MQTT_TOPIC_IMG_DATA, 0);
+        ESP_LOGI(TAG, "Subscribed to: %s, %s",
+                      MQTT_TOPIC_IMG_CTL, MQTT_TOPIC_IMG_DATA);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "MQTT disconnected");
         g_isMQTTConnected = false;
-        /* 不 drain 命令队列：队列消费者 cmdProcessTask 与传输层无关，断线清空
-         * 无正确性依据，反而会冲掉 HTTP 兜底刚同步入队的离线命令；队列深 20，
-         * 满时已有入队侧显式丢弃日志。 */
+        /* 不 drain 队列：会冲掉 HTTP 兜底刚入队的离线命令；队列深 20，满时入队侧已有日志 */
         break;
 
     case MQTT_EVENT_DATA:
@@ -66,8 +105,15 @@ static void mqtt_event_handler(void *handler_args,
                       event->topic_len, event->topic,
                       event->data_len, event->data);
 
-        /* Only process messages on the command / config topics.
-         * event->topic is NOT guaranteed null-terminated — use topic_len. */
+        /* 图片分片可达数千字节，不进命令队列，直接交 img 组件 */
+        if (topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_CTL) ||
+            topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_DATA))
+        {
+            img_mqtt_handle(event);
+            break;
+        }
+
+        /* 仅处理 cmd/config；event->topic 不保证 NUL 结尾，比较必须用 topic_len */
         if (!topic_matches(event->topic_len, event->topic, MQTT_TOPIC_CMD) &&
             !topic_matches(event->topic_len, event->topic, MQTT_TOPIC_CONFIG))
             break;
@@ -94,9 +140,8 @@ static void mqtt_event_handler(void *handler_args,
     case MQTT_EVENT_ERROR:
         ESP_LOGE(TAG, "MQTT error");
         g_isMQTTConnected = false;
-        /* 连接被 broker 拒绝（CONNACK 非 accepted）：用户名=DEVICE_ID 固定，
-         * 拒绝即密码（设备 Token）失效/被清理。置位事件后由 app_main 主循环触发
-         * 重新取 Token + 重建客户端，避免 esp-mqtt 无限自动重连失败。 */
+        /* CONNACK 非 accepted 即口令（设备 Token）失效：置 MQTT_AUTH_REFUSED_BIT，
+         * app_main 据此清 token + DeviceIDAuth 全量重认证，避免无限自动重连。 */
         if (event->error_handle != NULL &&
             event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED)
         {
@@ -112,8 +157,16 @@ static void mqtt_event_handler(void *handler_args,
     }
 }
 
+/* img 组件回执通道：img_ready/img_done/img_shown/img_error → img/reply */
+static int img_reply(const char *text)
+{
+    return mqtt_publish(MQTT_TOPIC_IMG_REPLY, text, strlen(text)) ? 0 : -1;
+}
+
 esp_mqtt_client_handle_t mqtt_app_create(void)
 {
+    /* keepalive 120→300s、reconnect_timeout 60s：减少射频唤醒与 TLS 全握手
+     * （S3 上 ECDSA 握手需 5-8s 且 CPU-bound，重连过频会拖高功耗）。 */
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
             .address = {
@@ -132,14 +185,16 @@ esp_mqtt_client_handle_t mqtt_app_create(void)
         .network = {
             .reconnect_timeout_ms = MQTT_RECONNECT_TIMEOUT_MS,
         },
+        .buffer = {
+            /* 默认 1024 装不下一片 4096 图片分片，也放不下配置快照 JSON */
+            .size = MQTT_BUFFER_SIZE,
+        },
         .credentials = {
             .username = DEVICE_ID,
         },
     };
 
-    /* 用 auth token（如有）作为 MQTT 密码。esp-mqtt 在 init 内部 strdup 了
-     * password，destroy 时释放的是那份副本，因此 init 返回后本地的 token
-     * 副本即可释放，无需存活到客户端销毁。 */
+    /* 用 auth token 作 MQTT 密码：esp-mqtt init 内部 strdup，init 返回后即可释放本地副本 */
     char *token = token_load();
     if (token != NULL && strlen(token) > 0)
     {
@@ -150,6 +205,12 @@ esp_mqtt_client_handle_t mqtt_app_create(void)
     free(token);
     if (client == NULL)
         return NULL;
+
+    /* img 模块：挂 storage(/fatfs)、建刷屏任务、注册回执；幂等，失败只降级图片功能 */
+    esp_err_t img_err = img_recv_start(img_reply);
+    if (img_err != ESP_OK)
+        ESP_LOGW(TAG, "img_recv_start failed: %s (图片传输不可用)",
+                      esp_err_to_name(img_err));
 
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID,
                                    mqtt_event_handler, client);
@@ -173,8 +234,7 @@ void mqtt_app_destroy(esp_mqtt_client_handle_t client)
 
 bool mqtt_publish(const char *topic, const char *payload, size_t len)
 {
-    /* Snapshot the shared handle to avoid use-after-free if the main
-     * task destroys the MQTT client concurrently (TOCTOU). */
+    /* 快照共享句柄：主任务可能并发 destroy 客户端，防 use-after-free（TOCTOU） */
     esp_mqtt_client_handle_t client = g_mqttClient;
 
     if (!g_isMQTTConnected || client == NULL || topic == NULL ||
