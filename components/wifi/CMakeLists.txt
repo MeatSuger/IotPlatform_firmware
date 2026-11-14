@@ -1,3 +1,4 @@
+# wifi 组件：STA 连接/自动重连 + DPP（Wi-Fi Easy Connect）配网状态机。
 idf_component_register(
     SRCS "src/wifi.c"
     INCLUDE_DIRS "include"
@@ -8,4 +9,5 @@ idf_component_register(
         esp_netif
         esp_event
         wpa_supplicant
+        nvs_flash
 )
