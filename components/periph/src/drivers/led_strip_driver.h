@@ -3,20 +3,12 @@
 
 #include "periph.h"
 
-/* --------------------------------------------------------------------------
- * LED strip transport — WS2812 灯带（espressif/led_strip over RMT）。
- *
- * Compatibility macros:
- *   PERIPH_LED_ENABLE — compile switch (default 1). Set to 0 to compile
- *                       the driver out entirely (board without WS2812).
- *   WS2812_GPIO       — default data pin when config omits "gpio".
- *   WS2812_LED_COUNT  — default LED count when config omits "count".
- *
- * Device config:
- *   {"transport":"led_strip","specs":{"gpio":48,"count":1}}
- * Control command (value 原语：rgb 数组作用于全部灯珠)：
- *   {"action":"led1","value":{"rgb":[255,0,0]}}
- * -------------------------------------------------------------------------- */
+/* LED strip transport — WS2812 灯带（espressif/led_strip over RMT）。
+ * PERIPH_LED_ENABLE 为编译开关（默认 1，置 0 整体编出，用于无 WS2812 的板子）；
+ * WS2812_GPIO / WS2812_LED_COUNT 为 config 缺省时的默认值。
+ * Device config：{"transport":"led_strip","specs":{"gpio":48,"count":1}}
+ * Control command：{"action":"led1","value":{"rgb":[255,0,0]}} — rgb 作用于全部灯珠。
+ */
 
 #ifndef PERIPH_LED_ENABLE
 #define PERIPH_LED_ENABLE 1

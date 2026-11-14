@@ -10,7 +10,6 @@
 
 static const char *TAG = "pwm";
 
-/* Driver-private data (dev->drvdata). */
 typedef struct
 {
     int pin;

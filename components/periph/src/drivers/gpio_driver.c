@@ -9,14 +9,13 @@
 
 static const char *TAG = "gpio";
 
-/* Driver-private data (dev->drvdata). */
 typedef struct
 {
     int pin;
     bool active_high;
 } gpio_dev_t;
 
-/* 逻辑电平 → 物理电平（active_high 配置） */
+/* 逻辑电平 → 物理电平（按 active_high 配置） */
 static int to_physical(const gpio_dev_t *g, int level)
 {
     return g->active_high ? level : (level ? 0 : 1);

@@ -12,18 +12,13 @@
 
 static const char *TAG = "spi";
 
-#define SPI_HOST          SPI2_HOST
-#define SPI_TX_MAX_BYTES  256
-#define SPI_DEFAULT_FREQ  1000000
-
-/* Driver-private data (dev->drvdata). */
 typedef struct
 {
     int cs;
     spi_device_handle_t handle;
 } spi_dev_t;
 
-/* 总线级共享状态：首个实例初始化并占总线引脚，末个实例释放 */
+/* 总线级共享状态：首实例初始化并占总线引脚，末实例释放 */
 static bool g_bus_up = false;
 static int g_clk = -1, g_mosi = -1, g_miso = -1;
 static int g_bus_users = 0;
@@ -32,7 +27,7 @@ static void bus_teardown(void)
 {
     if (g_bus_up)
     {
-        spi_bus_free(SPI_HOST);
+        spi_bus_free(SPI_TRANSPORT_HOST);
         g_bus_up = false;
     }
     periph_pin_release(g_clk);
@@ -59,7 +54,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     if (cJSON_IsNumber(jmiso) && jmiso->valueint >= 0)
         miso = jmiso->valueint;
 
-    int freq = SPI_DEFAULT_FREQ;
+    int freq = SPI_TRANSPORT_FREQ_HZ;
     cJSON *jfreq = cJSON_GetObjectItem(cfg, "freq_hz");
     if (cJSON_IsNumber(jfreq) && jfreq->valueint > 0)
         freq = jfreq->valueint;
@@ -91,9 +86,9 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
             .sclk_io_num = clk,
             .quadwp_io_num = -1,
             .quadhd_io_num = -1,
-            .max_transfer_sz = SPI_TX_MAX_BYTES + 16,
+            .max_transfer_sz = SPI_TRANSPORT_TX_MAX + 16,
         };
-        if (spi_bus_initialize(SPI_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK)
+        if (spi_bus_initialize(SPI_TRANSPORT_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK)
         {
             ESP_LOGE(TAG, "spi[%s]: spi_bus_initialize 失败", dev->name);
             periph_pin_release(clk);
@@ -122,7 +117,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
         .queue_size = 1,
     };
     spi_device_handle_t handle = NULL;
-    if (spi_bus_add_device(SPI_HOST, &devcfg, &handle) != ESP_OK)
+    if (spi_bus_add_device(SPI_TRANSPORT_HOST, &devcfg, &handle) != ESP_OK)
     {
         ESP_LOGE(TAG, "spi[%s]: spi_bus_add_device 失败", dev->name);
         periph_pin_release(cs);
@@ -170,8 +165,8 @@ static void spi_remove(periph_device_t *dev)
     dev->drvdata = NULL;
 }
 
-/* 解析 tx：优先数字数组 [165,60,...]；其次 hex 字符串（如 "A53CFF"，
- * 允许空格/逗号/制表符分隔，必须成对字节）。非法返回 -1。 */
+/* tx 解析：优先数字数组 [165,60,...]，其次 hex 字符串（可含空格/逗号/制表符，
+ * 必须成对字节）；非法返回 -1 */
 static int hex_val(char c)
 {
     if (c >= '0' && c <= '9')
@@ -236,7 +231,7 @@ static bool spi_command(periph_device_t *dev, const cJSON *pl)
         return false;
 
     cJSON *tx = cJSON_GetObjectItem(value, "tx");
-    uint8_t buf[SPI_TX_MAX_BYTES];
+    uint8_t buf[SPI_TRANSPORT_TX_MAX];
     int len = parse_tx(tx, buf, sizeof buf);
     if (len < 0)
     {

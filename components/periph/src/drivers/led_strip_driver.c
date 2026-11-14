@@ -12,7 +12,6 @@ static const char *TAG = "led_strip";
 
 #if PERIPH_LED_ENABLE
 
-/* Driver-private data (dev->drvdata). */
 typedef struct
 {
     led_strip_handle_t strip;
@@ -48,8 +47,8 @@ static bool led_strip_probe(periph_device_t *dev, const cJSON *cfg)
     };
     led_strip_rmt_config_t rmt_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, /* 10 MHz tick */
-        .mem_block_symbols = 0,            /* driver default size */
+        .resolution_hz = 10 * 1000 * 1000, /* 10MHz tick */
+        .mem_block_symbols = 0,            /* 0 = 用驱动默认大小 */
         .flags.with_dma = false,
     };
 
@@ -101,7 +100,7 @@ static bool led_strip_command(periph_device_t *dev, const cJSON *pl)
     if (value == NULL || !cJSON_IsObject(value))
         return false;
 
-    /* value: {"rgb":[r,g,b]} —— rgb 原语，云端负责颜色语义 */
+    /* value.rgb 为原语，颜色语义由云端换算 */
     cJSON *rgb = cJSON_GetObjectItem(value, "rgb");
     if (!cJSON_IsArray(rgb) || cJSON_GetArraySize(rgb) != 3)
     {

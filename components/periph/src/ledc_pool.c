@@ -9,23 +9,6 @@
 
 static const char *TAG = "ledc_pool";
 
-/* --------------------------------------------------------------------------
- * LEDC channel/timer pool — generic PWM resource manager.
- *
- * Timers are shared: all channels with the same frequency bind to one
- * timer (LEDC timers are the scarce resource, 4 on ESP32-S3; channels
- * are 8).  Duty resolution is derived from the frequency so that the
- * timer can represent it (res = min(14, log2(clk / freq))).
- * -------------------------------------------------------------------------- */
-
-#define LEDC_MODE        LEDC_LOW_SPEED_MODE
-/* timer 时钟源 = XTAL(40 MHz, S3)：APB 无法跨 light sleep 保持（DFS 降到 80 MHz
- * CPU 时 APB 仍为 80 MHz，但 light sleep 会门控 APB → PWM 掉输出），
- * 改用 XTAL + KEEP_ALIVE 后舵机/风扇可跨睡眠持续驱动（见下方 sleep_mode） */
-#define LEDC_CLK_HZ      (40U * 1000 * 1000) /* XTAL clock, S3 */
-#define LEDC_POOL_SLOTS  8                   /* LEDC_CHANNEL_MAX */
-#define LEDC_POOL_TIMERS 4                   /* LEDC_TIMER_MAX */
-
 typedef struct
 {
     bool in_use;
@@ -51,7 +34,7 @@ static uint32_t resolution_for(uint32_t freq_hz)
 {
     if (freq_hz == 0)
         return 0;
-    double res = log2((double)LEDC_CLK_HZ / (double)freq_hz);
+    double res = log2((double)LEDC_POOL_CLK_HZ / (double)freq_hz);
     uint32_t r = (uint32_t)res;
     if (r < 1)
         r = 1;
@@ -100,7 +83,7 @@ static ledc_timer_slot_t *timer_for(uint32_t freq_hz)
         if (!g_timers[i].in_use)
         {
             ledc_timer_config_t tcfg = {
-                .speed_mode = LEDC_MODE,
+                .speed_mode = LEDC_POOL_MODE,
                 .duty_resolution = (ledc_timer_bit_t)res,
                 .timer_num = g_timers[i].timer,
                 .freq_hz = freq_hz,
@@ -146,7 +129,7 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
 
             ledc_channel_config_t ch = {
                 .gpio_num = gpio,
-                .speed_mode = LEDC_MODE,
+                .speed_mode = LEDC_POOL_MODE,
                 .channel = s->channel,
                 .timer_sel = tm->timer,
                 .duty = 0,
@@ -168,12 +151,11 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
         {
             ledc_channel_config_t ch = {
                 .gpio_num = gpio,
-                .speed_mode = LEDC_MODE,
+                .speed_mode = LEDC_POOL_MODE,
                 .channel = s->channel,
                 .timer_sel = tm->timer,
                 .duty = 0,
                 .hpoint = 0,
-                /* 跨 light sleep 保持 PWM 输出：舵机维持位置/风扇不抖停 */
                 .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
@@ -197,10 +179,10 @@ bool ledc_pool_release(int gpio)
         ledc_chan_slot_t *s = &g_channels[i];
         if (s->in_use && s->gpio == gpio)
         {
-            /* 停止输出并回空闲低电平。注意：IDF 驱动删除通道不清 keep_alive/
-             * xpd 引用计数（ledc.c 源码 TODO），全部 PWM 设备移除后仍需重启
-             * 才能完全释放睡眠保持电流——当前接受。 */
-            ledc_stop(LEDC_MODE, s->channel, 0);
+            /* 停止输出并回空闲低电平。IDF 驱动删除通道不清 keep_alive/xpd 引用
+             * 计数（ledc.c 有 TODO），全部 PWM 设备移除后仍需重启才能完全释放
+             * 睡眠保持电流——当前接受。 */
+            ledc_stop(LEDC_POOL_MODE, s->channel, 0);
             s->in_use = false;
             s->gpio = -1;
             s->timer = LEDC_TIMER_MAX;
@@ -248,9 +230,9 @@ static bool set_ticks(int gpio, uint32_t ticks)
     if (ticks > max)
         ticks = max;
 
-    if (ledc_set_duty(LEDC_MODE, s->channel, ticks) != ESP_OK)
+    if (ledc_set_duty(LEDC_POOL_MODE, s->channel, ticks) != ESP_OK)
         return false;
-    return ledc_update_duty(LEDC_MODE, s->channel) == ESP_OK;
+    return ledc_update_duty(LEDC_POOL_MODE, s->channel) == ESP_OK;
 }
 
 bool ledc_pool_set_duty_pct(int gpio, int pct)
@@ -275,7 +257,6 @@ bool ledc_pool_set_pulse_us(int gpio, uint32_t pulse_us)
     if (max == 0)
         return false;
 
-    /* ticks = pulse_us/1e6 * freq * max */
     uint64_t freq = 0;
     for (int i = 0; i < LEDC_POOL_TIMERS; i++)
     {

@@ -4,24 +4,22 @@
 #include <string.h>
 
 #include "common.h"
-#include "esp_log.h" /* ESP_LOGI */
+#include "esp_log.h"
 #include "cJSON.h"
 
 #include "drivers/gpio_driver.h"
 #include "drivers/pwm_driver.h"
 #include "drivers/spi_driver.h"
 #include "drivers/led_strip_driver.h"
+#include "drivers/epd_driver.h"
 
 static const char *TAG = "periph";
 
-/* --------------------------------------------------------------------------
- * Driver registry (bus) + device list
- * -------------------------------------------------------------------------- */
+/* 驱动注册表（总线）与设备链表 */
 static periph_driver_t *g_drivers = NULL;
 static periph_device_t *g_devices = NULL;
 
-/* 引脚占用表（仲裁），GPIO_NUM_MAX 之上封顶 64 足够 */
-#define PERIPH_PIN_TABLE 64
+/* 引脚占用表（仲裁） */
 static bool g_pin_taken[PERIPH_PIN_TABLE];
 
 bool periph_pin_claim(int gpio, const char *who)
@@ -85,11 +83,7 @@ periph_device_t *periph_device_find(const char *name)
     return NULL;
 }
 
-/* --------------------------------------------------------------------------
- * Device lifecycle
- * -------------------------------------------------------------------------- */
-
-/* Match transport, probe and link a new device. Returns the device or NULL. */
+/* 匹配 transport、probe 并把新设备挂上总线；失败返回 NULL */
 static periph_device_t *device_create(const char *name,
                                       const periph_driver_t *drv,
                                       const cJSON *cfg)
@@ -128,7 +122,7 @@ bool periph_device_add(const char *name, const char *transport,
         return false;
     }
 
-    /* Device exists: reconfigure = remove old binding, probe anew. */
+    /* 设备已存在：重配置 = 先 remove 旧绑定，再重新 probe */
     periph_device_t *dev = periph_device_find(name);
     if (dev != NULL)
     {
@@ -166,7 +160,6 @@ bool periph_device_remove(const char *name)
     if (dev->driver->remove != NULL)
         dev->driver->remove(dev);
 
-    /* Unlink from the bus list. */
     periph_device_t **pp = &g_devices;    while (*pp != dev)
         pp = &(*pp)->next;
     *pp = dev->next;
@@ -176,15 +169,11 @@ bool periph_device_remove(const char *name)
     return true;
 }
 
-/* --------------------------------------------------------------------------
- * 期望配置 diff 应用（DeviceConfig.payload.actuators）
+/* 期望配置 diff 应用（DeviceConfig.payload.actuators）
  *
- * 设备类型（transport: gpio/pwm/spi/led_strip/...）由定义 specs.transport
- * 决定；新增传输只需在固件注册表加驱动，云端/后端无需改动。
- *
- * 字段名统一（2026）：后端驱动参数已由 config 改名为 specs
- * （与 Sensor 定义体同名，DB 列 params→specs），本处同步读取 specs。
- * -------------------------------------------------------------------------- */
+ * 设备类型由定义 specs.transport 决定；新增传输只需在固件注册驱动，
+ * 云端/后端无需改动。字段名 specs：2026 后端 config→specs（DB 列 params→specs）。
+ */
 
 /* id 是否出现在期望启用列表中 */
 static bool desired_active(const char *name, const cJSON *actuators)
@@ -228,7 +217,7 @@ bool periph_apply_config(const cJSON *actuators)
 
         const char *name = id->valuestring;
 
-        /* disabled 或非对象定义 → 移除 */
+        /* disabled 或 specs 非对象 → 移除 */
         bool active = !cJSON_IsBool(enabled) || cJSON_IsTrue(enabled);
         if (!active || !cJSON_IsObject(cfg))
         {
@@ -244,7 +233,7 @@ bool periph_apply_config(const cJSON *actuators)
             continue;
         }
 
-        /* 设备类型 = specs.transport（driver 字段为后端枚举占位，忽略） */
+        /* 设备类型 = specs.transport（driver 占位，忽略） */
         cJSON *transport = cJSON_GetObjectItem(cfg, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring[0] == '\0')
         {
@@ -280,9 +269,7 @@ bool periph_apply_config(const cJSON *actuators)
     return all_ok;
 }
 
-/* --------------------------------------------------------------------------
- * Command dispatch — control command routing by device name.
- * -------------------------------------------------------------------------- */
+/* 控制命令分发：action（设备名）→ 绑定 transport 的 ops->command */
 bool periph_dispatch(const cJSON *pl)
 {
     if (pl == NULL)
@@ -300,9 +287,6 @@ bool periph_dispatch(const cJSON *pl)
     return dev->driver->ops->command(dev, pl);
 }
 
-/* --------------------------------------------------------------------------
- * periph_bus_init — register the built-in transports.
- * -------------------------------------------------------------------------- */
 static int driver_count(void)
 {
     int n = 0;
@@ -311,6 +295,7 @@ static int driver_count(void)
     return n;
 }
 
+/* 注册内置 transport：gpio / pwm / spi / led_strip / epd */
 void periph_bus_init(void)
 {
     periph_driver_register(&gpio_driver);
@@ -319,6 +304,7 @@ void periph_bus_init(void)
 #if PERIPH_LED_ENABLE
     periph_driver_register(&led_strip_driver);
 #endif
+    periph_driver_register(&epd_driver);
     ESP_LOGI(TAG, "periph: bus ready (%d transport(s) registered)",
              driver_count());
 }

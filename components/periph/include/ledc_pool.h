@@ -4,32 +4,33 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* --------------------------------------------------------------------------
- * LEDC channel/timer pool — generic PWM resource manager.
- *
- * PWM devices (transport "pwm") acquire a channel per GPIO pin with a
- * desired frequency; the pool picks a timer already running at that
- * frequency, or configures a free one (up to 4 timers, shared by all
- * channels of the same frequency).  Duty resolution is derived from the
- * frequency automatically.
- *
- * All duty setters take effect immediately (update duty is called).
- * -------------------------------------------------------------------------- */
+#include "driver/ledc.h" /* LEDC_LOW_SPEED_MODE */
 
-/* Acquire a PWM channel for a GPIO pin at the given frequency (Hz).
- * Returns the channel index, or -1 on failure (pin busy / no timer). */
+/* LEDC channel/timer pool — PWM 资源管理：按 GPIO + 目标频率取通道，优先复用
+ * 同频已启用的 timer，没有才配置空闲 timer（S3 只有 4 个 timer，通道 8 个）；
+ * duty 分辨率由频率自动推导。所有 duty setter 立即生效。
+ */
+
+/* timer 时钟源显式选 XTAL 40MHz：APB 不能跨 light sleep 保持，DFS 降频也会
+ * 破坏波形；配 sleep_mode 后舵机/风扇可跨睡眠持续驱动 */
+#define LEDC_POOL_MODE LEDC_LOW_SPEED_MODE
+#define LEDC_POOL_CLK_HZ (40U * 1000 * 1000)
+#define LEDC_POOL_SLOTS 8  /* LEDC_CHANNEL_MAX */
+#define LEDC_POOL_TIMERS 4 /* LEDC_TIMER_MAX */
+
+/* 为 GPIO 取指定频率（Hz）的通道；失败（引脚已占/无空闲 timer）返回 -1 */
 int ledc_pool_acquire(int gpio, uint32_t freq_hz);
 
-/* Release the channel held by a GPIO pin. */
+/* 释放该 GPIO 持有的通道 */
 bool ledc_pool_release(int gpio);
 
-/* Full-scale duty count for the pin's timer resolution (2^res - 1). */
+/* 该引脚 timer 的满量程 tick（2^res - 1） */
 uint32_t ledc_pool_max_ticks(int gpio);
 
-/* Set duty as a percentage in [0, 100] (integer percent). */
+/* 设置占空比整数百分比 [0, 100] */
 bool ledc_pool_set_duty_pct(int gpio, int pct);
 
-/* Set duty from a pulse width in microseconds (0 = fully off). */
+/* 按脉宽微秒设置占空比（0 = 全关） */
 bool ledc_pool_set_pulse_us(int gpio, uint32_t pulse_us);
 
 #endif /* _LEDC_POOL_H_ */
