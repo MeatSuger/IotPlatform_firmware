@@ -13,27 +13,17 @@
 
 static const char *TAG = "appcfg";
 
-#define NVS_NAMESPACE      "appcfg"
-#define NVS_KEY_VERSION    "version"
-#define NVS_KEY_PAYLOAD    "payload"
-#define NVS_KEY_RPENDING   "rpending"
-
-/* 配置 payload 单条上限（NVS 整条读写，云端配置快照通常 < 1KB） */
-#define CONFIG_PAYLOAD_MAX 4095U
 static uint32_t s_appliedVersion = 0;
 static char *s_payload = NULL;
 static bool s_reportPending = false;
 static bool s_inited = false;
 
-/* --------------------------------------------------------------------------
- * NVS 持久化
- * -------------------------------------------------------------------------- */
 static void nvs_save_pending(bool pending)
 {
     nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK)
+    if (nvs_open(APP_CFG_NVS_NS, NVS_READWRITE, &h) != ESP_OK)
         return;
-    nvs_set_u8(h, NVS_KEY_RPENDING, pending ? 1 : 0);
+    nvs_set_u8(h, APP_CFG_NVS_KEY_RPENDING, pending ? 1 : 0);
     nvs_commit(h);
     nvs_close(h);
 }
@@ -45,21 +35,21 @@ void appcfg_init(void)
     s_inited = true;
 
     nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK)
+    if (nvs_open(APP_CFG_NVS_NS, NVS_READONLY, &h) != ESP_OK)
     {
         ESP_LOGI(TAG, "[appcfg] No saved config (namespace empty)");
         return;
     }
 
-    if (nvs_get_u32(h, NVS_KEY_VERSION, &s_appliedVersion) != ESP_OK)
+    if (nvs_get_u32(h, APP_CFG_NVS_KEY_VERSION, &s_appliedVersion) != ESP_OK)
         s_appliedVersion = 0;
 
     size_t len = 0;
-    if (nvs_get_str(h, NVS_KEY_PAYLOAD, NULL, &len) == ESP_OK && len > 0)
+    if (nvs_get_str(h, APP_CFG_NVS_KEY_PAYLOAD, NULL, &len) == ESP_OK && len > 0)
     {
         char *buf = malloc(len);
         if (buf != NULL &&
-            nvs_get_str(h, NVS_KEY_PAYLOAD, buf, &len) == ESP_OK)
+            nvs_get_str(h, APP_CFG_NVS_KEY_PAYLOAD, buf, &len) == ESP_OK)
         {
             s_payload = buf;
         }
@@ -70,7 +60,7 @@ void appcfg_init(void)
     }
 
     uint8_t p = 0;
-    if (nvs_get_u8(h, NVS_KEY_RPENDING, &p) == ESP_OK)
+    if (nvs_get_u8(h, APP_CFG_NVS_KEY_RPENDING, &p) == ESP_OK)
         s_reportPending = (p != 0);
 
     nvs_close(h);
@@ -100,7 +90,7 @@ bool appcfg_report_pending(void)
 /* 持久化成功后才更新内存态（崩溃安全：NVS 先行） */
 static bool appcfg_persist(uint32_t version, const char *payload)
 {
-    if (payload == NULL || strlen(payload) > CONFIG_PAYLOAD_MAX)
+    if (payload == NULL || strlen(payload) > APP_CFG_PAYLOAD_MAX)
     {
         ESP_LOGE(TAG, "[appcfg] Invalid config payload (%u bytes)",
                       payload != NULL ? (unsigned)strlen(payload) : 0);
@@ -108,17 +98,17 @@ static bool appcfg_persist(uint32_t version, const char *payload)
     }
 
     nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK)
+    if (nvs_open(APP_CFG_NVS_NS, NVS_READWRITE, &h) != ESP_OK)
     {
         ESP_LOGE(TAG, "[appcfg] nvs_open failed");
         return false;
     }
 
-    esp_err_t err = nvs_set_u32(h, NVS_KEY_VERSION, version);
+    esp_err_t err = nvs_set_u32(h, APP_CFG_NVS_KEY_VERSION, version);
     if (err == ESP_OK)
-        err = nvs_set_str(h, NVS_KEY_PAYLOAD, payload);
+        err = nvs_set_str(h, APP_CFG_NVS_KEY_PAYLOAD, payload);
     if (err == ESP_OK)
-        err = nvs_set_u8(h, NVS_KEY_RPENDING, 1);
+        err = nvs_set_u8(h, APP_CFG_NVS_KEY_RPENDING, 1);
     if (err == ESP_OK)
         err = nvs_commit(h);
     nvs_close(h);
@@ -145,12 +135,8 @@ void appcfg_report_sent(void)
     nvs_save_pending(false);
 }
 
-/* --------------------------------------------------------------------------
- * 配置分区运行时效果应用：
- *   - sensor.reportInterval（秒）→ g_reportIntervalMs（上报周期）
- *   - actuators[] → periph_apply_config()（执行器 diff 实例化/卸载）
- * 其余字段不生效但随 payload 原样持久化/回执。
- * -------------------------------------------------------------------------- */
+/* 运行时生效：sensor.reportInterval → g_reportIntervalMs，actuators[] →
+ * periph_apply_config() diff 实例化/卸载；其余分区只持久化/回执（见 appcfg.h）。 */
 static void apply_runtime_effects(const cJSON *config)
 {
     if (config == NULL || !cJSON_IsObject(config))
