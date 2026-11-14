@@ -7,11 +7,9 @@
 #include "cJSON.h"
 #include "esp_log.h"
 
-#define TAG "sensor"
+static const char *TAG = "sensor";
 
-/* --------------------------------------------------------------------------
- * Temperature collector — ESP32 内部温度传感器
- * -------------------------------------------------------------------------- */
+/* 内置 temperature 采集器：ESP32 内部温度传感器（esp_driver_tsens） */
 #if SOC_TEMP_SENSOR_SUPPORTED
 
 #include "driver/temperature_sensor.h"
@@ -32,8 +30,7 @@ static bool internal_temp_init(void)
         ESP_LOGE(TAG, "temperature_sensor_install failed: 0x%x", err);
         return false;
     }
-    /* 不在 init 时 enable：采样时才上电（见 read_internal_temp），
-     * 两次上报之间保持 disable，省 RTC 模拟域静态功耗 */
+    /* 不在 init 时 enable：采样时才上电，两次上报间保持 disable 省 RTC 模拟域静态功耗 */
     ESP_LOGI(TAG, "Temperature sensor ready");
     return true;
 }
@@ -54,7 +51,7 @@ static float read_internal_temp(void)
     temperature_sensor_disable(g_tempSensor);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "get_celsius failed: 0x%x", err);
-        return NAN; /* 故障路径不再返回 0.0f（与真实 0°C 混叠） */
+        return NAN;
     }
     return tsens_out;
 }
@@ -86,9 +83,6 @@ static cJSON *collect_temperature(const cJSON *def)
 
 #endif /* SOC_TEMP_SENSOR_SUPPORTED */
 
-/* --------------------------------------------------------------------------
- * Collector registry — type → collect function.
- * -------------------------------------------------------------------------- */
 typedef struct sensor_collector
 {
     const char *type;
@@ -107,7 +101,7 @@ bool sensor_register(const char *type, sensor_collect_fn fn)
     {
         if (strcmp(c->type, type) == 0)
         {
-            c->fn = fn; /* 覆盖注册 */
+            c->fn = fn;
             return true;
         }
     }
@@ -132,18 +126,14 @@ static sensor_collect_fn collector_find(const char *type)
     return NULL;
 }
 
-/* --------------------------------------------------------------------------
- * dataType 自检 — 采集器产物与云端定义 dataType 对齐（契约见 sensor.h 头注释
- * 与 docs/mqtt-api.md 遥测章节）。平台按 dataType 校验上报值：float/int → number、
- * bool → true/false、text/enum → 字符串，不符即丢弃；固件在源头做同规则自检，
- * 不符则跳过该点并告警。定义未声明 dataType 或类型未知时不拦截
- * （类型真源在平台，固件只做源头自检，不做 enum 枚举值校验）。
- * -------------------------------------------------------------------------- */
+/* dataType 源头自检（契约见 sensor.h 与 docs/mqtt-api.md 遥测章节）：float/int→number、
+ * bool→true/false、text/enum→字符串，不符即跳过该点并告警，避免整条上报被平台丢弃；
+ * 未声明或未知 dataType 放行（类型真源在平台，固件只做类型自检、不校验 enum 取值域）。 */
 static bool value_matches_datatype(const cJSON *def, const cJSON *value)
 {
     const cJSON *dt = cJSON_GetObjectItem(def, "dataType");
     if (!cJSON_IsString(dt))
-        return true; /* 定义未声明 dataType：放行 */
+        return true;
 
     if (strcmp(dt->valuestring, "float") == 0 ||
         strcmp(dt->valuestring, "int") == 0)
@@ -153,7 +143,7 @@ static bool value_matches_datatype(const cJSON *def, const cJSON *value)
     if (strcmp(dt->valuestring, "text") == 0 ||
         strcmp(dt->valuestring, "enum") == 0)
         return cJSON_IsString(value);
-    return true; /* 未知 dataType：类型真源在平台 */
+    return true;
 }
 
 bool sensor_init(void)
@@ -163,9 +153,7 @@ bool sensor_init(void)
     return ok;
 }
 
-/* --------------------------------------------------------------------------
- * sensor_build_report — 按云端 sensors[] 定义采集并生成上报 JSON。
- * -------------------------------------------------------------------------- */
+/* 按云端 sensors[] 定义采集并生成上报 JSON */
 char *sensor_build_report(const char *config_json)
 {
     if (config_json == NULL || config_json[0] == '\0')

@@ -5,19 +5,16 @@
 #include "appcfg.h"
 #include "sensor.h"
 
-#include <stdlib.h> /* malloc/free */
+#include <stdlib.h>
 #include "esp_log.h"
 #include "cJSON.h"
 
 static const char *TAG = "app";
 
-/* --------------------------------------------------------------------------
- * sensorReportTask — Core 0 周期上报传感器遥测。
- *
- * 数据源 = 云端物模型（config.sensors[] 定义，见 appcfg_payload），
- * 组装 {"sensors":[...]} 发布到 iot/{id}/telemetry；无定义/全部采集失败时
- * 跳过本轮，仅状态切换时告警一次（避免每周期刷日志）。
- * -------------------------------------------------------------------------- */
+/* sensorReportTask — Core 0 周期上报遥测：数据源为云端 sensors[] 定义（见 appcfg_payload），
+ * 组装 {"sensors":[...]} 发布到 iot/{id}/telemetry；无定义/全部采集失败时跳过本轮，
+ * 仅状态切换时告警一次（避免每周期刷日志）。
+ */
 void sensorReportTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -29,8 +26,7 @@ void sensorReportTask(void *pvParameters)
     for (;;)
     {
         EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
-        /* MQTT 未连接时跳过本轮：避免启动时序（WiFi 已连、MQTT 尚未 connected）
-         * 产生虚假的 "Sensor MQTT publish failed" 错误日志。 */
+        /* MQTT 未连接时跳过本轮，避免启动时序（WiFi 已连、MQTT 未 connected）刷出错误日志 */
         if ((bits & WIFI_CONNECTED_BIT) && g_isMQTTConnected)
         {
             /* 配置回执兜底：应用成功但回执未发出时周期性补发 */
@@ -56,15 +52,10 @@ void sensorReportTask(void *pvParameters)
     }
 }
 
-/* --------------------------------------------------------------------------
- * cmdProcessTask — Core 1 出队并分发后端消息。
- *
- * 执行器定义唯一真源为云端配置快照（appcfg → periph_apply_config）；
- * 设备类型（transport）由定义 specs.transport 决定，命令 value 为传输原语
- * （云端负责角度/颜色等语义换算）。本任务只做分发：
- *   1. 配置快照（version+config）→ appcfg_handle_config
- *   2. 控制命令（action = 执行器 id）→ periph_dispatch
- * -------------------------------------------------------------------------- */
+/* cmdProcessTask — Core 1 出队并分发后端消息：配置快照（version+config）→
+ * appcfg_handle_config，控制命令（action = 执行器 id）→ periph_dispatch。执行器定义唯一真源
+ * 是云端配置快照，设备类型由定义 specs.transport 决定，命令 value 为传输原语（语义换算在云端）。
+ */
 void cmdProcessTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -87,13 +78,9 @@ void cmdProcessTask(void *pvParameters)
             continue;
         }
 
-        /* --- 入站信封归一化 ---
-         * 三种来源形态：
-         *   A. 配置快照（MQTT retained 主题 iot/{id}/config 原文）:
-         *        {"version":N,"config":{...}}
-         *   B. 后端下行命令（MQTT iot/{id}/cmd 实时 / HTTP GET /commands 兜底）:
-         *        {"id":N,"type":"config"|"control","payload":{...},"createdAt":...}
-         * 解出“内容子对象”后分发（version+config → 配置状态机；action → 执行器路由）。 */
+        /* 入站信封归一化：配置快照原文 {"version":N,"config":{...}}（retained 主题
+         * iot/{id}/config）或后端信封 {"id":N,"type":...,"payload":{...}}（iot/{id}/cmd 实时、
+         * HTTP GET /commands 兜底）；解出内层 payload 后按内容分发（version+config / action）。 */
         cJSON *sub = root;
         cJSON *envPayload = cJSON_GetObjectItem(root, "payload");
         if (envPayload != NULL && cJSON_IsObject(envPayload))
