@@ -1,5 +1,5 @@
-# periph 组件：外设总线 + 执行器驱动（led/servo/speaker）+ LEDC 池。
-# 公共头：periph.h / ledc_pool.h；驱动私有头位于 src/drivers/（PRIV_INCLUDE_DIRS）。
+# periph 组件：外设总线 + 执行器驱动（gpio/pwm/spi/led_strip）+ 板载墨水屏驱动（epd）。
+# 公共头：periph.h / ledc_pool.h / epd.h；驱动私有头位于 src/drivers/（PRIV_INCLUDE_DIRS）。
 idf_component_register(
     SRCS
         "src/periph.c"
@@ -8,6 +8,7 @@ idf_component_register(
         "src/drivers/pwm_driver.c"
         "src/drivers/spi_driver.c"
         "src/drivers/led_strip_driver.c"
+        "src/drivers/epd_driver.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES
@@ -17,4 +18,5 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_ledc
         esp_driver_spi
+        esp_timer
 )
