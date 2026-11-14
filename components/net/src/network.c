@@ -2,33 +2,26 @@
 #include "common.h"
 #include "token.h"
 
-#include <limits.h> /* INT_MAX */
+#include <limits.h>
 #include <strings.h>
 #include <string.h>
 #include <stdlib.h>
 #include "esp_http_client.h"
-#include "esp_crt_bundle.h" /* esp_crt_bundle_attach (IDF bundled CA bundle) */
+#include "esp_crt_bundle.h" /* IDF 内置 CA bundle */
 #include "cJSON.h"
 #include "esp_log.h"
 
 static const char *TAG = "net";
 
-/* Max HTTP response body to buffer */
-#define MAX_HTTP_OUTPUT_BUFFER 8192
-
-/* --------------------------------------------------------------------------
- * http_resp_buf_t — response buffer passed as user_data to event handler.
- * -------------------------------------------------------------------------- */
+/* HTTP 响应缓冲上限：须容纳命令队列结果信封 */
+/* HTTP 事件回调的 user_data：body + 捕获的 Set-Cookie 响应头 */
 typedef struct {
-    char  *data;          /* body payload */
-    int    len;           /* bytes written to data */
-    int    cap;           /* total capacity of data[] */
-    char   set_cookie[512]; /* captured Set-Cookie response header */
+    char  *data;
+    int    len;
+    int    cap;
+    char   set_cookie[512]; /* Token 提取优先级最高来源 */
 } http_resp_buf_t;
 
-/* --------------------------------------------------------------------------
- * HTTP event handler — captures body + Set-Cookie header.
- * -------------------------------------------------------------------------- */
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     http_resp_buf_t *rb = (http_resp_buf_t *)evt->user_data;
@@ -69,10 +62,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-/* --------------------------------------------------------------------------
- * Internal helper: fill an esp_http_client_config_t with our defaults.
- * Caller allocates *cfg (heap preferred — struct is large).
- * -------------------------------------------------------------------------- */
+/* 统一填充 HTTP 客户端默认配置（struct 较大，调用方堆分配 *cfg） */
 static void make_http_config(esp_http_client_config_t *cfg,
                              const char *url,
                              http_resp_buf_t *rbuf)
@@ -83,17 +73,13 @@ static void make_http_config(esp_http_client_config_t *cfg,
         .timeout_ms = 8000,
         .event_handler = http_event_handler,
         .user_data = rbuf,
-        .buffer_size = MAX_HTTP_OUTPUT_BUFFER,
+        .buffer_size = NET_HTTP_OUTPUT_MAX,
     };
 }
 
-/* --------------------------------------------------------------------------
- * parse_api_code — 解析平台统一响应信封 {"code":N,"message":"...","data":...} 的业务码。
- *
- * 平台约定：所有接口（含业务错误）均返回 HTTP 200，业务结果由 body.code 表达
- * （见 back/api/swagger/API.md §2.1）。因此 HTTP 状态码不能用于判定成功。
- * 返回：body 中 code 字段值；body 非法/非预期结构返回 -1。
- * -------------------------------------------------------------------------- */
+/* 解析平台统一响应信封 {"code":N,"message":..,"data":..} 的业务码
+ * （back/api/swagger/API.md §2.1）：所有接口（含业务错误）都返回 HTTP 200，
+ * 成功与否只能看 body.code；body 非法/结构不符返回 -1。 */
 static int parse_api_code(const char *body)
 {
     if (body == NULL || body[0] == '\0')
@@ -113,20 +99,14 @@ static int parse_api_code(const char *body)
     return ret;
 }
 
-/* --------------------------------------------------------------------------
- * authbydeviceid — authenticate to the API server using device credentials.
- *
- * Tries the Set-Cookie header first, then falls back to the JSON body.
- *
- * Returns: true if a token was obtained.
- * -------------------------------------------------------------------------- */
+/* 设备认证：DeviceIDAuth 换 Token；先试 Set-Cookie，再回退 JSON body。 */
 bool authbydeviceid(void)
 {
 
     ESP_LOGI(TAG, "Starting device authentication...");
 
-    /* Allocate everything on heap — main task stack is only 3584 bytes */
-    char *buf_data = malloc(MAX_HTTP_OUTPUT_BUFFER);
+    /* 主任务栈仅 3584 B，所有大缓冲一律堆分配 */
+    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
     http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
     esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
     if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
@@ -135,7 +115,7 @@ bool authbydeviceid(void)
         return false;
     }
     *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
-                                .cap = MAX_HTTP_OUTPUT_BUFFER };
+                                .cap = NET_HTTP_OUTPUT_MAX };
     make_http_config(cfg, TOKEN_URL, rbuf);
     ESP_LOGD(TAG, "HTTP URL = [%s]", cfg->url);
     esp_http_client_handle_t http = esp_http_client_init(cfg);
@@ -152,14 +132,13 @@ bool authbydeviceid(void)
 
     ESP_LOGD(TAG, "HTTP status: %d", httpCode);
 
-    /* 统一信封：HTTP 200 + body.code==200 才是业务成功 */
+    /* 统一信封：HTTP 200 + code==200 才算业务成功 */
     if (httpCode == 200 && parse_api_code(rbuf->data) == 200) {
         ESP_LOGI(TAG, "Login request successful");
 
         char *new_token = NULL;
 
         if (strlen(rbuf->set_cookie) > 0) {
-            /* 优先从 Set-Cookie 提取，否则从 JSON body 提取 */
             new_token = extractTokenFromHeader(rbuf->set_cookie);
         }
 
@@ -177,7 +156,7 @@ bool authbydeviceid(void)
                 ESP_LOGI(TAG, "Token updated (new token differs from old or old was NULL)");
             }
 
-            free(old_token);   /* token_load 返回 malloc 副本 */
+            free(old_token);
             free(new_token);
             authSuccess = true;
         } else {
@@ -204,15 +183,9 @@ bool authbydeviceid(void)
     return authSuccess;
 }
 
-/* --------------------------------------------------------------------------
- * syncPendingCommands — Fetch pending commands (HTTP GET /commands 兜底通道).
- *
- * 拉取即消费：平台返回 data 数组后即从队列删除，因此**全部**条目必须逐条
- * 入队处理（按 id 升序保证 config/control 时序），不能只取最新一条——
- * 否则离线期间累积的控制命令会被静默丢弃。与 MQTT iot/{id}/cmd 实时通道互补。
- *
- * Returns: true if at least one command was enqueued.
- * -------------------------------------------------------------------------- */
+/* 兜底轮询平台命令队列（HTTP GET /commands，与 MQTT iot/{id}/cmd 实时通道互补）。
+ * 拉取即消费：必须按 id 升序逐条入队（保证 config/control 时序），只取最新一条
+ * 会静默丢弃离线期间累积的控制命令。 */
 bool syncPendingCommands(void)
 {
     char *token = token_load();
@@ -221,8 +194,7 @@ bool syncPendingCommands(void)
         return false;
     }
 
-    /* Allocate everything on heap — main task stack is only 3584 bytes */
-    char *buf_data = malloc(MAX_HTTP_OUTPUT_BUFFER);
+    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
     http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
     esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
     if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
@@ -231,7 +203,7 @@ bool syncPendingCommands(void)
         return false;
     }
     *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
-                                .cap = MAX_HTTP_OUTPUT_BUFFER };
+                                .cap = NET_HTTP_OUTPUT_MAX };
     make_http_config(cfg, DATA_PULL_URL, rbuf);
     esp_http_client_handle_t http = esp_http_client_init(cfg);
 
@@ -249,7 +221,7 @@ bool syncPendingCommands(void)
     esp_http_client_cleanup(http);
     free(token);
 
-    /* 业务结果看 body.code（HTTP 200 仅是到达） */
+    /* 业务结果看 body.code（HTTP 200 仅代表到达） */
     int apiCode = parse_api_code(rbuf->data);
     if (httpCode != 200 || apiCode != 200) {
         ESP_LOGW(TAG, "Sync: http=%d code=%d body=%.160s",
@@ -264,7 +236,6 @@ bool syncPendingCommands(void)
 
     ESP_LOGD(TAG, "Sync response: %s", rbuf->data);
 
-    /* Parse JSON */
     cJSON *root = cJSON_Parse(rbuf->data);
     free(cfg); free(rbuf); free(buf_data);
 
@@ -280,7 +251,6 @@ bool syncPendingCommands(void)
         return false;
     }
 
-    /* 按 id 升序逐条入队（拉取即消费：丢弃即永久丢失） */
     if (g_commandQueue == NULL)    {
         ESP_LOGW(TAG, "Sync: command queue not ready, skip enqueue");
         cJSON_Delete(root);
@@ -312,8 +282,7 @@ bool syncPendingCommands(void)
         cmdMsg.payload = cmdStr;
         cmdMsg.length = strlen(cmdStr);
 
-        /* 超时入队：队列满说明处理任务未就绪/积压，丢弃剩余并退出
-         * （已入队部分仍会被消费），避免永久死锁 */
+        /* 队列满：已入队部分仍会被消费，丢弃剩余并退出，避免永久死锁 */
         if (xQueueSend(g_commandQueue, &cmdMsg, pdMS_TO_TICKS(5000)) != pdPASS) {
             ESP_LOGW(TAG, "Sync: queue full, dropping remaining commands");
             free(cmdStr);
@@ -327,11 +296,7 @@ bool syncPendingCommands(void)
     return enqueued > 0;
 }
 
-/* --------------------------------------------------------------------------
- * extractTokenFromHeader — Parse X-Device-Token out of a Set-Cookie header.
- *
- * Returns: malloc'd token string, or NULL if not found.
- * -------------------------------------------------------------------------- */
+/* 从 Set-Cookie 取 X-Device-Token；返回 malloc 串，未找到返回 NULL。 */
 char *extractTokenFromHeader(const char *setCookieHeader)
 {
     const char *key = "X-Device-Token=";
@@ -351,11 +316,10 @@ char *extractTokenFromHeader(const char *setCookieHeader)
     return token;
 }
 
-/* --------------------------------------------------------------------------
- * extractTokenFromBody — Pull the device token from a JSON login response.
+/* extractTokenFromBody — Pull the device token from a JSON login response.
  *
  * Returns: malloc'd token from data.deviceToken, or NULL on parse failure.
- * -------------------------------------------------------------------------- */
+ */
 char *extractTokenFromBody(const char *jsonBody)
 {
     cJSON *root = cJSON_Parse(jsonBody);

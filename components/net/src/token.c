@@ -5,22 +5,19 @@
 #include "nvs.h"
 #include "esp_log.h"
 
-#define NVS_NAMESPACE "device"
-#define NVS_KEY_TOKEN "auth_token"
-
 static const char *TAG = "token";
 
 char *token_load(void)
 {
     nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    esp_err_t err = nvs_open(TOKEN_NVS_NS, NVS_READONLY, &handle);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "nvs_open failed: 0x%x", err);
         return NULL;
     }
 
     size_t len = 0;
-    err = nvs_get_str(handle, NVS_KEY_TOKEN, NULL, &len);
+    err = nvs_get_str(handle, TOKEN_NVS_KEY, NULL, &len);
     if (err != ESP_OK || len == 0) {
         nvs_close(handle);
         return NULL;
@@ -32,7 +29,7 @@ char *token_load(void)
         return NULL;
     }
 
-    err = nvs_get_str(handle, NVS_KEY_TOKEN, token, &len);
+    err = nvs_get_str(handle, TOKEN_NVS_KEY, token, &len);
     nvs_close(handle);
 
     if (err != ESP_OK) {
@@ -50,13 +47,13 @@ bool token_save(const char *token)
         return false;
 
     nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    esp_err_t err = nvs_open(TOKEN_NVS_NS, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open failed: 0x%x", err);
         return false;
     }
 
-    err = nvs_set_str(handle, NVS_KEY_TOKEN, token);
+    err = nvs_set_str(handle, TOKEN_NVS_KEY, token);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set_str failed: 0x%x", err);
         nvs_close(handle);
@@ -74,9 +71,9 @@ bool token_save(const char *token)
 void token_clear(void)
 {
     nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    esp_err_t err = nvs_open(TOKEN_NVS_NS, NVS_READWRITE, &handle);
     if (err == ESP_OK) {
-        nvs_erase_key(handle, NVS_KEY_TOKEN);
+        nvs_erase_key(handle, TOKEN_NVS_KEY);
         nvs_commit(handle);
         nvs_close(handle);
         ESP_LOGI(TAG, "Token cleared from NVS");

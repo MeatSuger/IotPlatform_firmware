@@ -3,13 +3,15 @@
 
 #include <stdbool.h>
 
-/* 设备认证：DeviceIDAuth（仅需路径 deviceId）——获取/刷新设备 Token。
- * 返回 true 表示成功取得并保存 Token。 */
+/* 兜底命令轮询的 HTTP 响应缓冲上限（字节） */
+#define NET_HTTP_OUTPUT_MAX 8192
+
+/* 设备认证：DeviceIDAuth（仅需路径 deviceId，无需用户登录），换取并保存设备
+ * Token；网络失败 / 信封 code != 200 时返回 false。 */
 bool authbydeviceid(void);
 
-/* 拉取并消费平台命令队列（GET /commands，DeviceAuth）：全部条目按 id 升序入队，
- * 与 MQTT iot/{id}/cmd 实时通道互补（开机 / 重连后兑底）。
- * 返回 true 表示至少入队一条。 */
+/* 兜底轮询平台命令队列（GET /commands，DeviceAuth）：条目按 id 升序入队，
+ * 与 MQTT iot/{id}/cmd 实时通道互补（开机 / 重连后）；返回是否至少入队一条。 */
 bool syncPendingCommands(void);
 
 char *extractTokenFromHeader(const char *setCookieHeader);
