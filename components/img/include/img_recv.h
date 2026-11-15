@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 /* img — 图片接收与刷屏（传输无关）：JSON 控制帧 → 分片落 FatFS 双槽轮换 → 独立任务流式刷屏。
- * kind="epd2bpp"（768×552 2bpp BWRY）落盘后刷屏，其余文件仅落盘。
+ * kind="epd2bpp"（2bpp BWRY，尺寸由当前面板决定）落盘后刷屏，其余文件仅落盘。
  * 主题：iot/{id}/img/ctl 收 img_start/img_end；iot/{id}/img/data 收二进制分片；
  * 回执 iot/{id}/img/reply（img_ready/img_done/img_shown/img_error）。
  * 分两条主题：位图分片可能恰以 '{'(0x7B) 开头，按首字节判类型会误当控制帧整片丢弃。 */

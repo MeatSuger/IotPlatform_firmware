@@ -5,7 +5,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES
-        periph
+        display
         fatfs
         wear_levelling
         espressif__cjson

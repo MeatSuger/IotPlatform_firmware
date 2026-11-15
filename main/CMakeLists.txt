@@ -8,6 +8,7 @@ idf_component_register(
         app
         appcfg
         core
+        display
         esp_driver_gpio
         esp_pm
         mqtt_app

@@ -14,7 +14,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 
-#include "epd.h"
+#include "display.h"
 #include "fatfs_store.h"
 
 static const char *TAG = "img";
@@ -103,7 +103,7 @@ static void show_task(void *arg)
             reply("{\"type\":\"img_error\",\"reason\":\"reopen failed\"}");
         } else {
             ESP_LOGI(TAG, "displaying %s on panel ...", s_show_name);
-            esp_err_t err = epd_show_bitmap_stream(file_reader, fp);
+            esp_err_t err = display_show(file_reader, fp);
             fclose(fp);
             if (err == ESP_OK) {
                 reply("{\"type\":\"img_shown\",\"name\":\"%s\"}", s_show_name);
@@ -181,8 +181,9 @@ static void on_text(const uint8_t *data, int len)
 
         bool is_panel = cJSON_IsString(kind) && strcmp(kind->valuestring, "epd2bpp") == 0;
 
-        if (is_panel && total != EPD_BITMAP_SIZE) {
-            ESP_LOGE(TAG, "panel bitmap size mismatch: %u != %d", (unsigned)total, EPD_BITMAP_SIZE);
+        if (is_panel && total != display_frame_bytes()) {
+            ESP_LOGE(TAG, "panel bitmap size mismatch: %u != %u", (unsigned)total,
+                     (unsigned)display_frame_bytes());
             reply("{\"type\":\"img_error\",\"reason\":\"panel size mismatch\"}");
             cJSON_Delete(root);
             return;

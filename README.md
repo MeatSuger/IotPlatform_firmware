@@ -48,8 +48,10 @@ firmware/
 │   ├── appcfg/                 # 配置快照状态机（NVS 持久化/version 幂等/回执/重启重放）
 │   ├── periph/                 # 声明式外设总线（device/driver 模型）：按执行器定义
 │   │                           #   config.transport(gpio/pwm/spi/led_strip) 实例化，引脚仲裁
-│   │                           #   + 板载墨水屏驱动 transport=epd（JD79665，见 epd.h）
-│   ├── img/                    # 图片接收：控制帧 + 二进制分片 → FatFS(/fatfs) → 墨水屏刷屏
+│   ├── display/                # 显示层：面板无关 API（display.h）+ 控制器适配（display_ctrl.h）
+│   │                           #   src/ctrl/ 下按面板拆分：ssd1683.c（4.2" BWR）、
+│   │                           #   jd79665.c（3.98" BWRY）；开机按 BUSY 极性自动识别
+│   ├── img/                    # 图片接收：控制帧 + 二进制分片 → FatFS(/fatfs) → 刷屏
 │   └── app/                    # 应用运行时（周期上报/命令分发任务 + 传感器按 type 采集器上报）
 ├── managed_components/         # 第三方组件（component manager 自动拉取，勿手改）
 ├── dependencies.lock           # 组件版本锁定

@@ -11,7 +11,7 @@
 #include "drivers/pwm_driver.h"
 #include "drivers/spi_driver.h"
 #include "drivers/led_strip_driver.h"
-#include "drivers/epd_driver.h"
+#include "drivers/display_driver.h"
 
 static const char *TAG = "periph";
 
@@ -304,7 +304,7 @@ void periph_bus_init(void)
 #if PERIPH_LED_ENABLE
     periph_driver_register(&led_strip_driver);
 #endif
-    periph_driver_register(&epd_driver);
+    periph_driver_register(&display_driver);
     ESP_LOGI(TAG, "periph: bus ready (%d transport(s) registered)",
              driver_count());
 }

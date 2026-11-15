@@ -17,7 +17,7 @@
 设备端**不做器件语义假设**，一切由云端下发的物模型定义驱动：
 
 - **写入类设备**（继电器/风扇/舵机/灯带/DAC 等）→ 云端 `actuators[]` 定义，固件按其
-  `specs.transport`（`gpio` / `pwm` / `spi` / `led_strip`）实例化硬件；控制命令
+  `specs.transport`（`gpio` / `pwm` / `spi` / `led_strip` / `epd`）实例化硬件；控制命令
   `value` 下发**传输原语**（电平/占空比/脉宽/数据帧/颜色分量），角度、颜色等语义
   换算由云端完成。
 - **读取类设备**（温度/湿度等传感器）→ 云端 `sensors[]` 定义，固件按其 `type`
@@ -70,7 +70,7 @@
 |---|---|
 | `id` | 执行器标识符（`^[a-z][a-z0-9_]{0,10}$`）＝ 控制命令 `action` |
 | `driver` | 后端枚举占位（led/servo/speaker 三选一即可），**固件忽略** |
-| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip`（固件注册表，可扩展） |
+| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip` / `epd`（固件注册表，可扩展） |
 | `specs.*` | transport 参数（见下） |
 | `enabled` | `false`（或缺省 true）→ 期望移除/不实例化 |
 
@@ -91,6 +91,11 @@
 | `pwm` | `pin` 必填；`freq_hz` 默认 1000 | `{"duty":80}`（0-100%）/ `{"pulse_us":1500}` | LEDC 输出；通道按引脚自动分配、timer 按频率共享；分辨率按频率自动推导 |
 | `spi` | `clk`/`mosi`/`cs` 必填；`miso` 可选；`freq_hz` 默认 1MHz；`mode` 默认 0 | `{"tx":"A5 3C FF"}` 或 `{"tx":[165,60,255]}` | SPI 主机写；同 host 总线引脚由首实例初始化、多设备独立 CS |
 | `led_strip` | `gpio` 默认 48；`count` 默认 1（可编译关闭） | `{"rgb":[255,0,0]}` | WS2812 灯带；rgb 原语作用于全部灯珠 |
+| `epd` | `size_inch` 屏幕英寸（展示用，固件忽略）；`width`/`height` 像素（宽为 8 的倍数）；`chip` 控制器型号（如 `ssd1683`）；`color_depth`：`bw` / `bwr` / `bwry` / `rgb565` / `rgb888` | `{"op":"selftest"}` | 墨水屏；面板固定接线，图片经 `iot/{id}/img/*` 二进制通道下发，不走命令原语 |
+
+> `epd` 的显示参数缺省时回退到编译期面板（兼容仅 `{"transport":"epd"}` 的存量定义）；
+> 当前固件内置 SSD1683 4.2" 400×300 BWR，`chip`/`width`/`height`/`color_depth` 与实物不符时
+> probe 失败并打日志。图片投递说明见 `components/img/include/img_recv.h`。
 
 > 角度/颜色等**器件语义由云端换算成原语后下发**：舵机类 → `pulse_us`，调色 → `rgb`。
 
