@@ -14,6 +14,9 @@ bool authbydeviceid(void);
  * 与 MQTT iot/{id}/cmd 实时通道互补（开机 / 重连后）；返回是否至少入队一条。 */
 bool syncPendingCommands(void);
 
+/* 上报面板芯片/分辨率：POST /devices/{id}/update（设备 Token） */
+bool reportPanelInfo(void);
+
 char *extractTokenFromHeader(const char *setCookieHeader);
 char *extractTokenFromBody(const char *jsonBody);
 

@@ -61,6 +61,9 @@ static void networkInitTask(void *pv)
     g_authSuccess = authbydeviceid();
     if (g_authSuccess)
         syncPendingCommands();
+    /* 上报面板芯片与分辨率 */
+    if (g_authSuccess)
+        reportPanelInfo();
 
     xEventGroupSetBits(g_wifiEventGroup, NETWORK_INIT_DONE_BIT);
     ESP_LOGI(TAG, "Network init task done (auth=%s)",

@@ -9,6 +9,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h" /* IDF 内置 CA bundle */
 #include "cJSON.h"
+#include "display.h"
 #include "esp_log.h"
 
 static const char *TAG = "net";
@@ -181,6 +182,87 @@ bool authbydeviceid(void)
 
     free(cfg); free(rbuf); free(buf_data);
     return authSuccess;
+}
+
+/* 上报面板芯片/分辨率：POST /devices/{id}/update（设备 Token）。
+ * 后端若无对应列会忽略未知字段并返回 200，故打印业务码便于发现未落库。 */
+bool reportPanelInfo(void)
+{
+    const char *chip = display_chip_id();
+    const display_info_t *info = display_info();
+    if (chip == NULL || info == NULL)
+    {
+        ESP_LOGD(TAG, "Panel not initialized, skip panel report");
+        return false;
+    }
+
+    char *token = token_load();
+    if (token == NULL || strlen(token) == 0)
+    {
+        free(token);
+        return false;
+    }
+
+    cJSON *body = cJSON_CreateObject();
+    if (body == NULL)
+    {
+        free(token);
+        return false;
+    }
+    cJSON_AddStringToObject(body, "panelChip", chip);
+    cJSON_AddNumberToObject(body, "panelWidth", info->width);
+    cJSON_AddNumberToObject(body, "panelHeight", info->height);
+    char *payload = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (payload == NULL)
+    {
+        free(token);
+        return false;
+    }
+
+    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
+    http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
+    esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
+    if (buf_data == NULL || rbuf == NULL || cfg == NULL)
+    {
+        ESP_LOGE(TAG, "Panel report: OOM");
+        free(buf_data); free(rbuf); free(cfg);
+        free(payload); free(token);
+        return false;
+    }
+    *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
+                                .cap = NET_HTTP_OUTPUT_MAX };
+    make_http_config(cfg, DEVICE_UPDATE_URL, rbuf);
+    esp_http_client_handle_t http = esp_http_client_init(cfg);
+    esp_http_client_set_method(http, HTTP_METHOD_POST);
+    esp_http_client_set_header(http, "X-Device-Token", token);
+    esp_http_client_set_header(http, "Content-Type", "application/json");
+    esp_http_client_set_post_field(http, payload, (int)strlen(payload));
+
+    const esp_err_t err = esp_http_client_perform(http);
+    const int httpCode = esp_http_client_get_status_code(http);
+    esp_http_client_cleanup(http);
+
+    bool ok = false;
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Panel report failed: %s", esp_err_to_name(err));
+    }
+    else if (httpCode == 200 && parse_api_code(rbuf->data) == 200)
+    {
+        ESP_LOGI(TAG, "Panel reported: %s %ux%u", chip, info->width,
+                 info->height);
+        ok = true;
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Panel report rejected: http=%d body=%.120s", httpCode,
+                 rbuf->data);
+    }
+
+    free(cfg); free(rbuf); free(buf_data);
+    free(payload); free(token);
+    return ok;
 }
 
 /* 兜底轮询平台命令队列（HTTP GET /commands，与 MQTT iot/{id}/cmd 实时通道互补）。

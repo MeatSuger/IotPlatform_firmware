@@ -5,6 +5,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES
+        display
         core
         espressif__cjson
         esp_http_client

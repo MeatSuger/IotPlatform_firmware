@@ -14,6 +14,8 @@
 #define API_HOST          "api.meatsuger.top"
 #define DATA_PULL_URL     "https://" API_HOST "/api/devices/" DEVICE_ID "/commands"
 #define TOKEN_URL         "https://" API_HOST "/api/devices/" DEVICE_ID "/token"
+/* 设备自更新（增量）：上报面板芯片与分辨率 */
+#define DEVICE_UPDATE_URL "https://" API_HOST "/api/devices/" DEVICE_ID "/update"
 
 /* MQTT broker (WSS) — address 拆成字段而非整 URI */
 #define MQTT_BROKER_PATH      "/api/ws/mqtt/broker"
@@ -73,7 +75,7 @@
  * 引脚选择（ESP32-S3，选错会导致无法启动或复位失效）：
  *   禁 GPIO0/3/45/46 strapping 引脚：其中 GPIO0 为低直接进串口下载模式，应用根本不运行；
  *   禁 GPIO19/20 USB-Serial-JTAG 副控制台（sdkconfig 已启用）；禁 GPIO26~32 片外 SPI
- *   Flash（16MB）；避 GPIO43/44 UART0 主控制台；GPIO7~12 为板载墨水屏（见 periph/epd.h）。
+ *   Flash（16MB）；避 GPIO43/44 UART0 主控制台；GPIO7~12 为板载墨水屏（见 display.h）。
  * 默认取 4：以上均未占用；启动后由 periph_pin_claim() 占位，云端物模型不得分配此引脚。 */
 #define FACTORY_RESET_GPIO         4
 
