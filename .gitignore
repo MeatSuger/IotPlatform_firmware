@@ -72,6 +72,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# 本地设备密钥(模板：components/core/include/secrets.h.example)
+secrets.h
+
 # User-specific configuration files
 *.user
 *.workspace # General workspace files, can be from various tools

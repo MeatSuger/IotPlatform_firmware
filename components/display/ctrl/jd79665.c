@@ -1,9 +1,9 @@
-// JD79665（华为 A1）3.98" 768x552 四色 BWRY 适配层。
-// 命令序列（移植自 Hwawei-epd/jd6xxx，已在实屏验证）：
+// JD79665(华为 A1)3.98" 768x552 四色 BWRY 适配层。
+// 命令序列(移植自 Hwawei-epd/jd6xxx，已在实屏验证)：
 //   复位 → 0xAA/0x01/0x00(4B,69)/0x05/0x08/0x06/0x03/0x60/0x30(08)/0x50(3F)
 //   → 0x61(768x552) → 0x65/0xE3(2F)/0x84(01) → 0x83 整屏窗口 → 0x04 上电
 //   刷屏 0x10 + 整帧 2bpp → 0x12(0x00) → 0x02 掉电；深睡 0x07+0xA5。
-// BUSY 为「低 = 忙」（开漏，需要上拉）。
+// BUSY 为「低 = 忙」(开漏，需要上拉)。
 
 #include <string.h>
 
@@ -89,7 +89,7 @@ static esp_err_t jd_init(void) {
   if (s_frame == NULL) {
     s_frame = heap_caps_malloc(JD_FRAME_BYTES, MALLOC_CAP_DMA);
     if (s_frame == NULL) {
-      ESP_LOGE(TAG, "帧缓冲分配失败（%d B）", JD_FRAME_BYTES);
+      ESP_LOGE(TAG, "帧缓冲分配失败(%d B)", JD_FRAME_BYTES);
       return ESP_ERR_NO_MEM;
     }
   }
@@ -115,7 +115,7 @@ static esp_err_t jd_init(void) {
                                                          : ESP_FAIL;
 }
 
-// 原生格式与逻辑位图一致（2bpp BWRY），整行拷贝
+// 原生格式与逻辑位图一致(2bpp BWRY)，整行拷贝
 static void jd_store_row(uint16_t y, const uint8_t *row) {
   if (y < JD_HEIGHT) {
     memcpy(s_frame + (size_t)y * JD_ROW_BYTES, row, JD_ROW_BYTES);

@@ -8,7 +8,7 @@
 #include "esp_netif.h"
 #include "esp_smartconfig.h"
 #include "esp_wifi.h"
-#include "esp_wpa.h"
+#include "esp_wpa.h" /* esp_supplicant_disable_pmk_caching */
 #include "nvs.h"
 
 static const char *TAG = "wifi";
@@ -22,6 +22,10 @@ typedef enum {
 
 static volatile wifi_sta_state_t s_sta_state = WIFI_STA_CONNECTING;
 static bool s_prov_mode = false;
+static int s_connect_failures = 0;
+
+/* 配网凭据连不上(密码错/AP 不在)时重新广播，避免永久卡死 */
+#define WIFI_PROV_CONNECT_ATTEMPTS 3
 
 /* 拿到 IP 后才置位，避免把连不上的网络固化 */
 static bool prov_flag_read(void) {
@@ -76,6 +80,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         xEventGroupClearBits(g_wifiEventGroup, WIFI_CONNECTED_BIT);
         xEventGroupSetBits(g_wifiEventGroup, WIFI_DISCONNECTED_BIT);
       }
+      if (s_sta_state == WIFI_STA_CONNECTING && s_prov_mode &&
+          ++s_connect_failures >= WIFI_PROV_CONNECT_ATTEMPTS) {
+        s_connect_failures = 0;
+        s_sta_state = WIFI_STA_PROVISIONING;
+        ESP_LOGW(TAG, "WiFi connect failed %d times, restarting SmartConfig",
+                 WIFI_PROV_CONNECT_ATTEMPTS);
+        esp_smartconfig_stop();
+        start_smartconfig();
+        break;
+      }
       if (s_sta_state != WIFI_STA_PROVISIONING)
         esp_wifi_connect(); /* 配网监听态不发起连接 */
       break;
@@ -87,6 +101,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     ESP_LOGI(TAG, "WiFi connected, IP: " IPSTR, IP2STR(&event->ip_info.ip));
     s_sta_state = WIFI_STA_UP;
+    s_connect_failures = 0;
+    s_prov_mode = false;
     if (g_wifiEventGroup != NULL) {
       xEventGroupClearBits(g_wifiEventGroup, WIFI_DISCONNECTED_BIT);
       xEventGroupSetBits(g_wifiEventGroup, WIFI_CONNECTED_BIT);
@@ -111,6 +127,7 @@ static void smartconfig_event_handler(void *arg, esp_event_base_t event_base,
       memcpy(wc.sta.password, ev->password, sizeof(wc.sta.password));
 
       s_sta_state = WIFI_STA_CONNECTING;
+      s_connect_failures = 0;
       esp_err_t e =
           esp_wifi_set_config(WIFI_IF_STA, &wc); /* 持久化到 WiFi NVS */
       ESP_LOGI(TAG, "SmartConfig got credentials, connecting to %s ... %s",
@@ -168,7 +185,7 @@ bool wifi_init_sta(void) {
 
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-  /* 规避 IDF 6.0 PMKSA NULL-deref 崩溃（espressif/esp-idf#15584） */
+  /* 规避 IDF 6.0 PMKSA NULL-deref 崩溃(espressif/esp-idf#15584) */
   esp_supplicant_disable_pmk_caching(true);
 
   ESP_ERROR_CHECK(esp_wifi_start());
@@ -178,7 +195,7 @@ bool wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     start_smartconfig();
   } else {
-    /* 有标记但无 STA profile（异常清库）→ 转配网 */
+    /* 有标记但无 STA profile(异常清库)→ 转配网 */
     wifi_config_t cur;
     bool profile_ok = (esp_wifi_get_config(WIFI_IF_STA, &cur) == ESP_OK &&
                        cur.sta.ssid[0] != '\0');

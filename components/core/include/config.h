@@ -5,8 +5,9 @@
 
 #define DEVICE_ID         "90431b"
 
-/* 注册设备时后端只返回一次的引导密钥，首次取 token 时放在 X-Device-Secret */
-#define DEVICE_SECRET     "3e598ade74563b2a423859a1ebff0859ae53b24acda44a7dcdb22c4066575395"
+/* 注册设备时后端只返回一次的引导密钥，首次取 token 时放在 X-Device-Secret。
+ * 真实值放在本地 secrets.h(已 gitignore)，模板见 secrets.h.example。 */
+#include "secrets.h"
 
 /* 服务端 HTTP 接口，见 back/api/swagger/API.md */
 #define API_HOST          "api.meatsuger.top"
@@ -33,7 +34,7 @@
 /* 收包缓冲：容纳一个图片分片或配置快照 JSON */
 #define MQTT_BUFFER_SIZE        8192
 
-/* 默认上报周期（ms），云端 sensor.reportInterval 可覆盖 */
+/* 默认上报周期(ms)，云端 sensor.reportInterval 可覆盖 */
 #define SEND_INTERVAL     30000U
 
 /* 1 = modem-sleep + light-sleep；0 = 仅 DFS，射频常开 */

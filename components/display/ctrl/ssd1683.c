@@ -1,6 +1,6 @@
-// SSD1683 4.2" 400x300 BWR（黑/白/红）。命令序列：
+// SSD1683 4.2" 400x300 BWR(黑/白/红)。命令序列：
 //   复位 → 0x12 → 0x21/0x3C → 0x11/0x44/0x45/0x4E/0x4F 窗口
-//   → 0x24(BW)/0x26(RED) 双平面 → 0x22=0xF7 → 0x20 → 等 BUSY（高=忙）。
+//   → 0x24(BW)/0x26(RED) 双平面 → 0x22=0xF7 → 0x20 → 等 BUSY(高=忙)。
 
 #include <string.h>
 
@@ -61,13 +61,20 @@ static void ssd_set_window(void) {
 }
 
 static esp_err_t ssd_init(void) {
-  if (s_bw == NULL) {
-    s_bw = heap_caps_malloc(SSD_PLANE_BYTES, MALLOC_CAP_DMA);
-    s_red = heap_caps_malloc(SSD_PLANE_BYTES, MALLOC_CAP_DMA);
-    if (s_bw == NULL || s_red == NULL) {
-      ESP_LOGE(TAG, "平面缓冲分配失败（%d B × 2）", SSD_PLANE_BYTES);
+  if (s_bw == NULL || s_red == NULL) {
+    /* 两个平面必须同生同灭：只成功一个时下次 memset 会踩 NULL */
+    uint8_t *bw = heap_caps_malloc(SSD_PLANE_BYTES, MALLOC_CAP_DMA);
+    uint8_t *red = heap_caps_malloc(SSD_PLANE_BYTES, MALLOC_CAP_DMA);
+    if (bw == NULL || red == NULL) {
+      heap_caps_free(bw);
+      heap_caps_free(red);
+      s_bw = NULL;
+      s_red = NULL;
+      ESP_LOGE(TAG, "平面缓冲分配失败(%d B × 2)", SSD_PLANE_BYTES);
       return ESP_ERR_NO_MEM;
     }
+    s_bw = bw;
+    s_red = red;
   }
   memset(s_bw, 0x00, SSD_PLANE_BYTES);
   memset(s_red, 0x00, SSD_PLANE_BYTES);
@@ -91,7 +98,7 @@ static esp_err_t ssd_init(void) {
   return ESP_OK;
 }
 
-// 逻辑行 → 双平面：黑 BW=0/RED=0；白 BW=1/RED=0；红/黄 两个平面都置 1（只给 RED 会判成黑）
+// 逻辑行 → 双平面：黑 BW=0/RED=0；白 BW=1/RED=0；红/黄 两个平面都置 1(只给 RED 会判成黑)
 static void ssd_store_row(uint16_t y, const uint8_t *row) {
   if (y >= SSD_HEIGHT) {
     return;
@@ -114,7 +121,7 @@ static void ssd_store_row(uint16_t y, const uint8_t *row) {
 }
 
 static esp_err_t ssd_flush(void) {
-  // 每个平面前重设窗口（写完一平面上计数器停在末尾/回绕）
+  // 每个平面前重设窗口(写完一平面上计数器停在末尾/回绕)
   ssd_set_window();
   display_bus_cmd(0x24); // Write Black/White RAM
   display_bus_write(s_bw, SSD_PLANE_BYTES);

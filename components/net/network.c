@@ -1,24 +1,30 @@
 #include "network.h"
 #include "common.h"
+#include "net_parse.h"
 #include "token.h"
 
 #include <limits.h>
-#include <strings.h>
-#include <string.h>
 #include <stdlib.h>
-#include "esp_http_client.h"
+#include <string.h>
+#include <strings.h>
+
 #include "esp_crt_bundle.h" /* IDF 内置 CA bundle */
+#include "esp_http_client.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "display.h"
-#include "esp_log.h"
 
 static const char *TAG = "net";
 
-/* HTTP 回调上下文：body + Set-Cookie */
+/* 响应体硬上限：超过即失败，绝不静默截断 */
+#define NET_HTTP_RESPONSE_MAX (64 * 1024)
+
+/* HTTP 回调上下文：可增长 body + Set-Cookie */
 typedef struct {
     char  *data;
     int    len;
     int    cap;
+    bool   overflow;
     char   set_cookie[512]; /* Token 优先从 Set-Cookie 取 */
 } http_resp_buf_t;
 
@@ -39,111 +45,147 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
         break;
 
     case HTTP_EVENT_ON_DATA: {
-        if (rb == NULL || rb->data == NULL)
+        if (rb == NULL || rb->data == NULL || evt->data_len <= 0)
             break;
 
-        int room = rb->cap - rb->len;
-        int copy = (evt->data_len < room) ? evt->data_len : room;
-        if (copy > 0) {
-            memcpy(rb->data + rb->len, evt->data, copy);
-            rb->len += copy;
-            rb->data[rb->len] = '\0';
+        int need = rb->len + evt->data_len;
+        if (need > rb->cap) {
+            if (need > NET_HTTP_RESPONSE_MAX) {
+                rb->overflow = true;
+                break;
+            }
+            int new_cap = rb->cap;
+            while (new_cap < need)
+                new_cap = (new_cap > NET_HTTP_RESPONSE_MAX / 2)
+                              ? NET_HTTP_RESPONSE_MAX
+                              : new_cap * 2;
+            char *grown = realloc(rb->data, (size_t)new_cap + 1);
+            if (grown == NULL) {
+                rb->overflow = true;
+                break;
+            }
+            rb->data = grown;
+            rb->cap = new_cap;
         }
+
+        memcpy(rb->data + rb->len, evt->data, evt->data_len);
+        rb->len += evt->data_len;
+        rb->data[rb->len] = '\0';
         break;
-        
     }
-    case HTTP_EVENT_ON_FINISH:
-        if (rb != NULL)
-            rb->len = 0;
-        break;
+
     default:
         break;
     }
     return ESP_OK;
 }
 
-/* struct 较大，cfg 由调用方堆分配 */
-static void make_http_config(esp_http_client_config_t *cfg,
-                             const char *url,
-                             http_resp_buf_t *rbuf)
+static http_resp_buf_t *resp_buf_new(void)
 {
-    *cfg = (esp_http_client_config_t){
-        .url = url,
-        .crt_bundle_attach  = esp_crt_bundle_attach,
-        .timeout_ms = 8000,
-        .event_handler = http_event_handler,
-        .user_data = rbuf,
-        .buffer_size = NET_HTTP_OUTPUT_MAX,
-    };
+    http_resp_buf_t *rb = calloc(1, sizeof *rb);
+    if (rb == NULL)
+        return NULL;
+    rb->data = malloc(NET_HTTP_OUTPUT_MAX + 1);
+    if (rb->data == NULL) {
+        free(rb);
+        return NULL;
+    }
+    rb->cap = NET_HTTP_OUTPUT_MAX;
+    rb->data[0] = '\0';
+    return rb;
 }
 
-/* 所有接口都返回 HTTP 200，业务结果看 body.code；非法 body 返回 -1 */
-static int parse_api_code(const char *body)
+static void resp_buf_free(http_resp_buf_t *rb)
 {
-    if (body == NULL || body[0] == '\0')
-        return -1;
+    if (rb == NULL)
+        return;
+    free(rb->data);
+    free(rb);
+}
 
-    cJSON *root = cJSON_Parse(body);
-    if (root == NULL)
-    {
-        ESP_LOGE(TAG, "Envelope parse error: %s",
-                      cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
-        return -1;
+/* 统一 GET/POST：header_key 为空表示不带认证头，body 非空则 POST JSON。
+ * 成功返回 ESP_OK 并交出 rb(调用方 resp_buf_free)；响应超限也按失败处理。 */
+static esp_err_t http_request(const char *url, const char *header_key,
+                              const char *header_val, const char *body,
+                              http_resp_buf_t **out, int *status_out)
+{
+    http_resp_buf_t *rb = resp_buf_new();
+    if (rb == NULL)
+        return ESP_ERR_NO_MEM;
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 8000,
+        .event_handler = http_event_handler,
+        .user_data = rb,
+        .buffer_size = NET_HTTP_OUTPUT_MAX,
+    };
+
+    esp_http_client_handle_t http = esp_http_client_init(&cfg);
+    if (http == NULL) {
+        ESP_LOGE(TAG, "esp_http_client_init failed: %s", url);
+        resp_buf_free(rb);
+        return ESP_FAIL;
     }
 
-    cJSON *code = cJSON_GetObjectItem(root, "code");
-    int ret = (cJSON_IsNumber(code)) ? code->valueint : -1;
-    cJSON_Delete(root);
-    return ret;
+    if (header_key != NULL && header_val != NULL)
+        esp_http_client_set_header(http, header_key, header_val);
+
+    if (body != NULL) {
+        esp_http_client_set_method(http, HTTP_METHOD_POST);
+        esp_http_client_set_header(http, "Content-Type", "application/json");
+        esp_http_client_set_post_field(http, body, (int)strlen(body));
+    }
+
+    const esp_err_t err = esp_http_client_perform(http);
+    *status_out = esp_http_client_get_status_code(http);
+    esp_http_client_cleanup(http);
+
+    if (err != ESP_OK) {
+        resp_buf_free(rb);
+        return err;
+    }
+    if (rb->overflow) {
+        ESP_LOGE(TAG, "HTTP response exceeded %d bytes: %s",
+                 NET_HTTP_RESPONSE_MAX, url);
+        resp_buf_free(rb);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    *out = rb;
+    return ESP_OK;
 }
 
 /* 设备 ID + 引导密钥换 Token：先试 Set-Cookie，再回退 body */
 bool authbydeviceid(void)
 {
-
     ESP_LOGI(TAG, "Starting device authentication...");
 
-    /* 主任务栈小，大缓冲一律堆分配 */
-    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
-    http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
-    esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
-    if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
-        ESP_LOGE(TAG, "OOM: cannot allocate HTTP buffers");
-        free(buf_data); free(rbuf); free(cfg);
-        return false;
-    }
-    *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
-                                .cap = NET_HTTP_OUTPUT_MAX };
-    make_http_config(cfg, TOKEN_URL, rbuf);
-    ESP_LOGD(TAG, "HTTP URL = [%s]", cfg->url);
-    esp_http_client_handle_t http = esp_http_client_init(cfg);
-    esp_http_client_set_header(http, "X-Device-Secret", DEVICE_SECRET);
-
-    esp_err_t err = esp_http_client_perform(http);
+    http_resp_buf_t *rb = NULL;
+    int httpCode = 0;
+    const esp_err_t err = http_request(TOKEN_URL, "X-Device-Secret",
+                                       DEVICE_SECRET, NULL, &rb, &httpCode);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP perform failed: 0x%x", err);
-        esp_http_client_cleanup(http);
-        free(cfg); free(rbuf); free(buf_data);
+        ESP_LOGE(TAG, "Token request failed: %s", esp_err_to_name(err));
         return false;
     }
-    int httpCode = esp_http_client_get_status_code(http);
+
     bool authSuccess = false;
 
     ESP_LOGD(TAG, "HTTP status: %d", httpCode);
 
     /* HTTP 200 + code==200 才算成功 */
-    if (httpCode == 200 && parse_api_code(rbuf->data) == 200) {
+    if (httpCode == 200 && parse_api_code(rb->data) == 200) {
         ESP_LOGI(TAG, "Login request successful");
 
         char *new_token = NULL;
 
-        if (strlen(rbuf->set_cookie) > 0) {
-            new_token = extractTokenFromHeader(rbuf->set_cookie);
-        }
+        if (rb->set_cookie[0] != '\0')
+            new_token = extractTokenFromHeader(rb->set_cookie);
 
-        if (new_token == NULL && rbuf->len > 0) {
-            new_token = extractTokenFromBody(rbuf->data);
-        }
+        if (new_token == NULL && rb->len > 0)
+            new_token = extractTokenFromBody(rb->data);
 
         if (new_token != NULL) {
             char *old_token = token_load();
@@ -152,7 +194,7 @@ bool authbydeviceid(void)
                 ESP_LOGI(TAG, "Token unchanged, skip saving");
             } else {
                 token_save(new_token);
-                ESP_LOGI(TAG, "Token updated (new token differs from old or old was NULL)");
+                ESP_LOGI(TAG, "Token updated");
             }
 
             free(old_token);
@@ -160,25 +202,16 @@ bool authbydeviceid(void)
             authSuccess = true;
         } else {
             ESP_LOGE(TAG, "Failed to extract token from response");
-            authSuccess = false;
         }
     } else {
         ESP_LOGE(TAG, "Authentication failed: http=%d body=%.120s",
-                    httpCode, rbuf->data);
-        authSuccess = false;
+                 httpCode, rb->data);
     }
 
-    esp_http_client_cleanup(http);
+    resp_buf_free(rb);
 
-    if (authSuccess) {
-        char *tok = token_load();
-        ESP_LOGD(TAG, "Auth token: %s", tok ? tok : "(null)");
-        free(tok);
-    }
-    else
+    if (!authSuccess)
         ESP_LOGE(TAG, "Authentication failed: cannot retrieve token");
-
-    free(cfg); free(rbuf); free(buf_data);
     return authSuccess;
 }
 
@@ -187,22 +220,19 @@ bool reportPanelInfo(void)
 {
     const char *chip = display_chip_id();
     const display_info_t *info = display_info();
-    if (chip == NULL || info == NULL)
-    {
+    if (chip == NULL || info == NULL) {
         ESP_LOGD(TAG, "Panel not initialized, skip panel report");
         return false;
     }
 
     char *token = token_load();
-    if (token == NULL || strlen(token) == 0)
-    {
+    if (token == NULL || strlen(token) == 0) {
         free(token);
         return false;
     }
 
     cJSON *body = cJSON_CreateObject();
-    if (body == NULL)
-    {
+    if (body == NULL) {
         free(token);
         return false;
     }
@@ -211,54 +241,33 @@ bool reportPanelInfo(void)
     cJSON_AddNumberToObject(body, "panelHeight", info->height);
     char *payload = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
-    if (payload == NULL)
-    {
+    if (payload == NULL) {
         free(token);
         return false;
     }
 
-    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
-    http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
-    esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
-    if (buf_data == NULL || rbuf == NULL || cfg == NULL)
-    {
-        ESP_LOGE(TAG, "Panel report: OOM");
-        free(buf_data); free(rbuf); free(cfg);
-        free(payload); free(token);
+    http_resp_buf_t *rb = NULL;
+    int httpCode = 0;
+    const esp_err_t err = http_request(DEVICE_UPDATE_URL, "X-Device-Token",
+                                       token, payload, &rb, &httpCode);
+    free(token);
+    free(payload);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Panel report failed: %s", esp_err_to_name(err));
         return false;
     }
-    *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
-                                .cap = NET_HTTP_OUTPUT_MAX };
-    make_http_config(cfg, DEVICE_UPDATE_URL, rbuf);
-    esp_http_client_handle_t http = esp_http_client_init(cfg);
-    esp_http_client_set_method(http, HTTP_METHOD_POST);
-    esp_http_client_set_header(http, "X-Device-Token", token);
-    esp_http_client_set_header(http, "Content-Type", "application/json");
-    esp_http_client_set_post_field(http, payload, (int)strlen(payload));
-
-    const esp_err_t err = esp_http_client_perform(http);
-    const int httpCode = esp_http_client_get_status_code(http);
-    esp_http_client_cleanup(http);
 
     bool ok = false;
-    if (err != ESP_OK)
-    {
-        ESP_LOGW(TAG, "Panel report failed: %s", esp_err_to_name(err));
-    }
-    else if (httpCode == 200 && parse_api_code(rbuf->data) == 200)
-    {
+    if (httpCode == 200 && parse_api_code(rb->data) == 200) {
         ESP_LOGI(TAG, "Panel reported: %s %ux%u", chip, info->width,
                  info->height);
         ok = true;
-    }
-    else
-    {
+    } else {
         ESP_LOGW(TAG, "Panel report rejected: http=%d body=%.120s", httpCode,
-                 rbuf->data);
+                 rb->data);
     }
 
-    free(cfg); free(rbuf); free(buf_data);
-    free(payload); free(token);
+    resp_buf_free(rb);
     return ok;
 }
 
@@ -271,50 +280,33 @@ bool syncPendingCommands(void)
         return false;
     }
 
-    char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
-    http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
-    esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
-    if (buf_data == NULL || rbuf == NULL || cfg == NULL) {
-        ESP_LOGE(TAG, "Sync: OOM");
-        free(buf_data); free(rbuf); free(cfg); free(token);
-        return false;
-    }
-    *rbuf = (http_resp_buf_t){ .data = buf_data, .len = 0,
-                                .cap = NET_HTTP_OUTPUT_MAX };
-    make_http_config(cfg, DATA_PULL_URL, rbuf);
-    esp_http_client_handle_t http = esp_http_client_init(cfg);
-
-    esp_http_client_set_header(http, "X-Device-Token", token);
-
-    esp_err_t err = esp_http_client_perform(http);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Sync HTTP perform failed: 0x%x", err);
-        esp_http_client_cleanup(http);
-        free(cfg); free(rbuf); free(buf_data); free(token);
-        return false;
-    }
-    int httpCode = esp_http_client_get_status_code(http);
-
-    esp_http_client_cleanup(http);
+    http_resp_buf_t *rb = NULL;
+    int httpCode = 0;
+    const esp_err_t err = http_request(DATA_PULL_URL, "X-Device-Token", token,
+                                       NULL, &rb, &httpCode);
     free(token);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Sync HTTP request failed: %s", esp_err_to_name(err));
+        return false;
+    }
 
     /* HTTP 200 只代表到达 */
-    int apiCode = parse_api_code(rbuf->data);
+    int apiCode = parse_api_code(rb->data);
     if (httpCode != 200 || apiCode != 200) {
-        ESP_LOGW(TAG, "Sync: http=%d code=%d body=%.160s",
-                    httpCode, apiCode, rbuf->data);
+        ESP_LOGW(TAG, "Sync: http=%d code=%d body=%.160s", httpCode, apiCode,
+                 rb->data);
         if (apiCode == 401) {
             ESP_LOGW(TAG, "Sync: device token invalid/expired, clearing local token");
             token_clear();
         }
-        free(cfg); free(rbuf); free(buf_data);
+        resp_buf_free(rb);
         return false;
     }
 
-    ESP_LOGD(TAG, "Sync response: %s", rbuf->data);
+    ESP_LOGD(TAG, "Sync response: %s", rb->data);
 
-    cJSON *root = cJSON_Parse(rbuf->data);
-    free(cfg); free(rbuf); free(buf_data);
+    cJSON *root = cJSON_Parse(rb->data);
+    resp_buf_free(rb);
 
     if (root == NULL) {
         ESP_LOGE(TAG, "Sync: JSON parse error");
@@ -328,11 +320,12 @@ bool syncPendingCommands(void)
         return false;
     }
 
-    if (g_commandQueue == NULL)    {
+    if (g_commandQueue == NULL) {
         ESP_LOGW(TAG, "Sync: command queue not ready, skip enqueue");
         cJSON_Delete(root);
         return false;
     }
+
     int lastId = -1;
     int enqueued = 0;
     for (;;) {
@@ -371,47 +364,4 @@ bool syncPendingCommands(void)
     ESP_LOGI(TAG, "Sync: enqueued %d pending command(s)", enqueued);
     cJSON_Delete(root);
     return enqueued > 0;
-}
-
-/* 从 Set-Cookie 取 X-Device-Token，返回 malloc 串 */
-char *extractTokenFromHeader(const char *setCookieHeader)
-{
-    const char *key = "X-Device-Token=";
-    const char *found = strstr(setCookieHeader, key);
-    if (found == NULL)
-        return NULL;
-
-    found += strlen(key);
-    const char *end = strchr(found, ';');
-    size_t len = end ? (size_t)(end - found) : strlen(found);
-
-    char *token = malloc(len + 1);
-    if (token == NULL)
-        return NULL;
-    memcpy(token, found, len);
-    token[len] = '\0';
-    return token;
-}
-
-/* 从 body.data.deviceToken 取 Token */
-char *extractTokenFromBody(const char *jsonBody)
-{
-    cJSON *root = cJSON_Parse(jsonBody);
-    if (root == NULL) {
-        ESP_LOGE(TAG, "JSON parse error: %s",
-                     cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
-        return NULL;
-    }
-
-    char *token = NULL;
-    cJSON *data = cJSON_GetObjectItem(root, "data");
-    if (data != NULL) {
-        cJSON *deviceToken = cJSON_GetObjectItem(data, "deviceToken");
-        if (deviceToken != NULL && cJSON_IsString(deviceToken)) {
-            token = strdup(deviceToken->valuestring);
-        }
-    }
-
-    cJSON_Delete(root);
-    return token;
 }

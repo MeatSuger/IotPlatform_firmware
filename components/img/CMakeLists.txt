@@ -1,9 +1,8 @@
 idf_component_register(
     SRCS
-        "src/img_recv.c"
-        "src/fatfs_store.c"
+        "img_recv.c"
+        "fatfs_store.c"
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src"
     REQUIRES
         display
         fatfs

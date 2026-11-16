@@ -31,8 +31,9 @@ void sensorReportTask(void *pvParameters)
             if (appcfg_report_pending())
                 appcfg_flush_pending_report();
 
-            const char *cfg = appcfg_payload();
+            char *cfg = appcfg_payload();
             char *report = (cfg != NULL) ? sensor_build_report(cfg) : NULL;
+            free(cfg);
             if (report != NULL)
             {
                 if (!mqtt_publish(MQTT_TOPIC_DATA, report, strlen(report)))

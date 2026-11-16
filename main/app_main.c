@@ -4,7 +4,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_pm.h"
-#include "esp_wifi.h"
 #include "mqtt_app.h"
 #include "network.h"
 #include "nvs_flash.h"
@@ -62,15 +61,31 @@ static void networkInitTask(void *pv) {
   vTaskDelete(NULL);
 }
 
-/* 重启要重新关联 WiFi 和 TLS 握手，指数退避 5s→2min */
-static uint32_t s_restartBackoffMs = 5000U;
+/* 重启要重新关联 WiFi 和 TLS 握手，指数退避 5s→2min。
+ * esp_restart 会重载 .rtc.data，必须用 RTC_NOINIT + magic 才能跨重启保留。 */
+#define RESTART_BACKOFF_MAGIC 0x5A17B00FU
+#define RESTART_BACKOFF_MIN_MS 5000U
+#define RESTART_BACKOFF_MAX_MS 120000U
+RTC_NOINIT_ATTR static uint32_t s_restartBackoffMs;
+RTC_NOINIT_ATTR static uint32_t s_restartBackoffMagic;
+
+static uint32_t restart_backoff_ms(void) {
+  if (s_restartBackoffMagic != RESTART_BACKOFF_MAGIC ||
+      s_restartBackoffMs < RESTART_BACKOFF_MIN_MS ||
+      s_restartBackoffMs > RESTART_BACKOFF_MAX_MS)
+    s_restartBackoffMs = RESTART_BACKOFF_MIN_MS;
+  return s_restartBackoffMs;
+}
+
 static void backoff_restart(const char *why) {
+  const uint32_t delay_ms = restart_backoff_ms();
   ESP_LOGE("main", "%s: restarting in %u s", why,
-           (unsigned)(s_restartBackoffMs / 1000U));
-  vTaskDelay(pdMS_TO_TICKS(s_restartBackoffMs));
-  s_restartBackoffMs *= 2U;
-  if (s_restartBackoffMs > 120000U)
-    s_restartBackoffMs = 120000U;
+           (unsigned)(delay_ms / 1000U));
+  vTaskDelay(pdMS_TO_TICKS(delay_ms));
+  s_restartBackoffMagic = RESTART_BACKOFF_MAGIC;
+  s_restartBackoffMs = delay_ms * 2U;
+  if (s_restartBackoffMs > RESTART_BACKOFF_MAX_MS)
+    s_restartBackoffMs = RESTART_BACKOFF_MAX_MS;
   esp_restart();
 }
 
@@ -80,10 +95,8 @@ static void backoff_restart(const char *why) {
 static void connectionRecoveryTask(void *pv) {
   const bool full_reauth = (pv != NULL);
 
-  if (g_mqttClient) {
-    mqtt_app_destroy(g_mqttClient);
-    g_mqttClient = NULL; /* 立即置 NULL，防其他任务引用旧句柄 */
-  }
+  if (g_mqttClient)
+    mqtt_app_destroy(g_mqttClient); /* 内部先摘全局句柄再阻塞 stop */
 
   if (full_reauth) {
     token_clear();
@@ -118,7 +131,8 @@ static void run_recovery(bool full_reauth) {
   if (!(rb & RECOVERY_DONE_BIT))
     backoff_restart("Connection recovery stuck");
 
-  s_restartBackoffMs = 5000U; /* 恢复成功，退避归零 */
+  s_restartBackoffMs = RESTART_BACKOFF_MIN_MS; /* 恢复成功，退避归零 */
+  s_restartBackoffMagic = RESTART_BACKOFF_MAGIC;
 }
 
 void app_main(void) {

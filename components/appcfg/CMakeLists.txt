@@ -1,7 +1,6 @@
 idf_component_register(
-    SRCS "src/appcfg.c"
+    SRCS "appcfg.c" "appcfg_logic.c"
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src"
     REQUIRES
         core
         mqtt_app

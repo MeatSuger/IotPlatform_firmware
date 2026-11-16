@@ -1,8 +1,7 @@
-#include "gpio_driver.h"
+#include "drivers/gpio_driver.h"
 
 #include <stdlib.h>
 
-#include "common.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "driver/gpio.h"

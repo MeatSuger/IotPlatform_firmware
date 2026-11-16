@@ -1,11 +1,10 @@
-// 图片接收：控制帧 + 二进制分片 → FatFS 双槽轮换落盘 →（面板位图）刷到墨水屏。
+// 图片接收：控制帧 + 二进制分片 → FatFS 双槽轮换落盘 →(面板位图)刷到墨水屏。
 // 协议见 img_recv.h。
 
 #include "img_recv.h"
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"

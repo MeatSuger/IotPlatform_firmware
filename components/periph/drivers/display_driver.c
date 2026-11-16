@@ -1,13 +1,12 @@
 // epd transport 胶水：引脚仲裁 + 命令转发，驱动在 display 组件。
 // config: {"transport":"epd"}；control: {"value":{"op":"selftest"}}。
 
-#include "display_driver.h"
+#include "drivers/display_driver.h"
 
 #include <string.h>
 #include <strings.h>
 
 #include "cJSON.h"
-#include "common.h"
 #include "display.h"
 #include "esp_log.h"
 
@@ -45,7 +44,7 @@ static bool display_opt_pixels(const cJSON *cfg, const char *key,
   if (!cJSON_IsNumber(item) || item->valuedouble < 1 ||
       item->valuedouble > 4096 ||
       item->valuedouble != (double)(unsigned)item->valuedouble) {
-    ESP_LOGE(TAG, "display: specs.%s 非法（需 1-4096 的整数）", key);
+    ESP_LOGE(TAG, "display: specs.%s 非法(需 1-4096 的整数)", key);
     return false;
   }
   *value = (unsigned)item->valuedouble;
@@ -95,7 +94,7 @@ static bool display_check_cfg(const char *owner, const cJSON *cfg) {
     const char *actual = display_color_depth();
     if (!cJSON_IsString(depth) || actual == NULL ||
         strcmp(depth->valuestring, actual) != 0) {
-      ESP_LOGE(TAG, "display[%s]: specs.color_depth='%s' 不受支持（当前 %s）",
+      ESP_LOGE(TAG, "display[%s]: specs.color_depth='%s' 不受支持(当前 %s)",
                owner, cJSON_IsString(depth) ? depth->valuestring : "?",
                actual != NULL ? actual : "unknown");
       return false;

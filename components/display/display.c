@@ -2,8 +2,6 @@
 
 #include "display.h"
 
-#include <string.h>
-
 #include "display_ctrl.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -50,7 +48,7 @@ static SemaphoreHandle_t display_mutex(void) {
   return s_lock;
 }
 
-/* 总线原语（供适配层调用） */
+/* 总线原语(供适配层调用) */
 static void display_bus_transmit(const void *buf, size_t len) {
   if (s_bus_failed) {
     return;
@@ -72,7 +70,7 @@ void display_bus_cmd(uint8_t cmd) {
 void display_bus_data(uint8_t data) { display_bus_transmit(&data, 1); }
 
 void display_bus_write(const void *buf, size_t len) {
-  // 分块发送（单笔 ≤ 4 KB）
+  // 分块发送(单笔 ≤ 4 KB)
   const uint8_t *p = (const uint8_t *)buf;
   while (len > 0 && !s_bus_failed) {
     const size_t chunk = (len > 4096) ? 4096 : len;
@@ -104,7 +102,7 @@ bool display_bus_wait_busy(bool busy_high, uint32_t timeout_ms,
       return true; // 没忙过：按已完成处理
     }
     if (now - t0 >= (int64_t)timeout_ms * 1000) {
-      ESP_LOGE(TAG, "[%s] BUSY 超时（>%u ms, level=%d）", tag,
+      ESP_LOGE(TAG, "[%s] BUSY 超时(>%u ms, level=%d)", tag,
                (unsigned)timeout_ms, gpio_get_level(DISPLAY_PIN_BUSY));
       return false;
     }
@@ -191,7 +189,7 @@ static void display_pm_lock(void) {
   if (s_pm_lock == NULL) {
     if (esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "display", &s_pm_lock) !=
         ESP_OK) {
-      ESP_LOGW(TAG, "pm lock create failed（退化为允许 light sleep）");
+      ESP_LOGW(TAG, "pm lock create failed(退化为允许 light sleep)");
       return;
     }
   }
@@ -282,7 +280,7 @@ static esp_err_t display_bringup(void) {
       s_ctrl = order[i];
       break;
     }
-    ESP_LOGW(TAG, "探测 %s 无响应（%s）", order[i]->name,
+    ESP_LOGW(TAG, "探测 %s 无响应(%s)", order[i]->name,
              esp_err_to_name(err));
   }
   display_pm_unlock();
@@ -292,14 +290,14 @@ static esp_err_t display_bringup(void) {
   }
 
   if (s_row_buf != NULL) {
-    ESP_LOGI(TAG, "%s 重新初始化完成（深睡唤醒）", s_ctrl->name);
+    ESP_LOGI(TAG, "%s 重新初始化完成(深睡唤醒)", s_ctrl->name);
     return ESP_OK;
   }
 
   const size_t row_bytes = s_ctrl->width / 4;
   s_row_buf = heap_caps_malloc(row_bytes, MALLOC_CAP_DMA);
   if (s_row_buf == NULL) {
-    ESP_LOGE(TAG, "行缓冲分配失败（%u 字节）", (unsigned)row_bytes);
+    ESP_LOGE(TAG, "行缓冲分配失败(%u 字节)", (unsigned)row_bytes);
     return ESP_ERR_NO_MEM;
   }
 
@@ -351,7 +349,7 @@ esp_err_t display_show(display_read_t read_cb, void *ctx) {
   for (uint16_t y = 0; y < s_ctrl->height; y++) {
     const int n = read_cb(ctx, s_row_buf, row_bytes);
     if (n != (int)row_bytes) {
-      ESP_LOGE(TAG, "位图第 %u 行读取不足（%d/%u）", (unsigned)y, n,
+      ESP_LOGE(TAG, "位图第 %u 行读取不足(%d/%u)", (unsigned)y, n,
                (unsigned)row_bytes);
       err = ESP_ERR_INVALID_SIZE;
       break;
@@ -430,7 +428,7 @@ void display_self_test(void) {
     return;
   }
 
-  ESP_LOGI(TAG, "自检：%u 条等宽彩条（%s）", (unsigned)p.count, s_ctrl->name);
+  ESP_LOGI(TAG, "自检：%u 条等宽彩条(%s)", (unsigned)p.count, s_ctrl->name);
   const esp_err_t err = display_show(pattern_read, &p);
   ESP_LOGI(TAG, "自检 %s", err == ESP_OK ? "完成" : "失败");
 }

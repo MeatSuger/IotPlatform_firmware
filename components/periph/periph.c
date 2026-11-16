@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "common.h"
 #include "esp_log.h"
 #include "cJSON.h"
 
@@ -104,6 +103,8 @@ static periph_device_t *device_create(const char *name,
         return NULL;
     }
 
+    /* 深拷贝用于后续 diff，失败只影响去重效率 */
+    dev->specs = cJSON_Duplicate(cfg, 1);
     dev->next = g_devices;
     g_devices = dev;
     return dev;
@@ -122,14 +123,22 @@ bool periph_device_add(const char *name, const char *transport,
         return false;
     }
 
-    /* 已存在则先 remove 再 probe */
+    /* 配置未变化则不重配，避免周期重放把执行器输出复位 */
     periph_device_t *dev = periph_device_find(name);
     if (dev != NULL)
     {
+        if (dev->specs != NULL && cJSON_Compare(dev->specs, cfg, 1))
+        {
+            ESP_LOGD(TAG, "periph: device '%s' unchanged, skip re-probe", name);
+            return true;
+        }
+
         if (dev->driver->remove != NULL)
             dev->driver->remove(dev);
         dev->driver = drv;
         dev->drvdata = NULL;
+        cJSON_Delete(dev->specs);
+        dev->specs = NULL;
 
         if (!drv->probe(dev, cfg))
         {
@@ -137,6 +146,7 @@ bool periph_device_add(const char *name, const char *transport,
                           name, transport);
             return false;
         }
+        dev->specs = cJSON_Duplicate(cfg, 1);
         ESP_LOGI(TAG, "periph: device '%s' reconfigured (transport %s)",
                       name, transport);
         return true;
@@ -160,10 +170,12 @@ bool periph_device_remove(const char *name)
     if (dev->driver->remove != NULL)
         dev->driver->remove(dev);
 
-    periph_device_t **pp = &g_devices;    while (*pp != dev)
+    periph_device_t **pp = &g_devices;
+    while (*pp != dev)
         pp = &(*pp)->next;
     *pp = dev->next;
 
+    cJSON_Delete(dev->specs);
     free(dev);
     ESP_LOGI(TAG, "periph: device '%s' removed", name);
     return true;
@@ -191,7 +203,7 @@ bool periph_apply_config(const cJSON *actuators)
 {
     if (actuators == NULL || !cJSON_IsArray(actuators))
     {
-        ESP_LOGE(TAG, "periph: actuators 期望列表非法（非数组），忽略");
+        ESP_LOGE(TAG, "periph: actuators 期望列表非法(非数组)，忽略");
         return false;
     }
 
@@ -206,7 +218,7 @@ bool periph_apply_config(const cJSON *actuators)
         if (!cJSON_IsString(id) || strlen(id->valuestring) == 0 ||
             strlen(id->valuestring) > PERIPH_NAME_MAX - 1)
         {
-            ESP_LOGW(TAG, "periph: 跳过非法执行器定义（id 缺失或超长）");
+            ESP_LOGW(TAG, "periph: 跳过非法执行器定义(id 缺失或超长)");
             all_ok = false;
             continue;
         }
@@ -242,7 +254,7 @@ bool periph_apply_config(const cJSON *actuators)
 
         if (!periph_device_add(name, transport->valuestring, cfg))
         {
-            ESP_LOGE(TAG, "periph: 执行器 '%s' 实例化失败（transport %s）",
+            ESP_LOGE(TAG, "periph: 执行器 '%s' 实例化失败(transport %s)",
                           name, transport->valuestring);
             all_ok = false;
         }
@@ -265,7 +277,7 @@ bool periph_apply_config(const cJSON *actuators)
     return all_ok;
 }
 
-/* action（设备名）→ ops->command */
+/* action(设备名)→ ops->command */
 bool periph_dispatch(const cJSON *pl)
 {
     if (pl == NULL)

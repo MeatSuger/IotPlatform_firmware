@@ -1,22 +1,24 @@
-# MQTT API 文档（终端设备）
+# MQTT API 文档(终端设备)
 
 ## 连接信息
 
 | 项目 | 值 |
 |---|---|
 | Broker (WSS) | `wss://api.meatsuger.top/api/ws/mqtt/broker` |
-| 用户名 | `90431b`（DEVICE_ID） |
-| 密码 | 设备 Token（`GET /api/devices/{deviceId}/token` 获取，需 Header `X-Device-Secret`） |
-| 订阅（命令） | `iot/90431b/cmd`（QoS1） |
-| 订阅（配置快照） | `iot/90431b/config`（QoS1 + retained） |
-| 发布（配置回执） | `iot/90431b/config/report`（QoS1） |
-| 发布（遥测） | `iot/90431b/telemetry` |
+| 用户名 | `90431b`(DEVICE_ID) |
+| 密码 | 设备 Token(`GET /api/devices/{deviceId}/token` 获取，需 Header `X-Device-Secret`) |
+| 订阅(命令) | `iot/90431b/cmd`(QoS1) |
+| 订阅(配置快照) | `iot/90431b/config`(QoS1 + retained) |
+| 发布(配置回执) | `iot/90431b/config/report`(QoS1) |
+| 发布(遥测) | `iot/90431b/telemetry` |
 
 ## 设备引导与凭证
 
-1. 平台注册设备时返回 `deviceId` 与 `deviceSecret`（**只返回一次**，服务端仅保存 SHA-256）。
-2. 固件把二者写入 `components/core/include/config.h` 的 `DEVICE_ID` / `DEVICE_SECRET`。
-3. 首次启动（或 NVS Token 失效）时调用：
+1. 平台注册设备时返回 `deviceId` 与 `deviceSecret`(**只返回一次**，服务端仅保存 SHA-256)。
+2. 固件把 `deviceId` 写入 `components/core/include/config.h` 的 `DEVICE_ID`，
+   把 `deviceSecret` 写入本地 `components/core/include/secrets.h` 的 `DEVICE_SECRET`
+   (该文件不入库，模板见 `secrets.h.example`)。
+3. 首次启动(或 NVS Token 失效)时调用：
 
 ```
 GET /api/devices/{deviceId}/token
@@ -25,7 +27,7 @@ X-Device-Secret: <deviceSecret>
 
 4. 拿到的 `deviceToken` 存入 NVS，作为 MQTT `password` 使用；后续启动复用，无需每次换取。
 
-> 仅凭设备 ID 不能换取 Token。属主轮换密钥（`POST /api/devices/{deviceId}/secret`）
+> 仅凭设备 ID 不能换取 Token。属主轮换密钥(`POST /api/devices/{deviceId}/secret`)
 > 或删除设备会立即吊销旧 Token；此时固件会清空本地 Token，但**必须用新密钥重刷固件**
 > 才能再次完成引导。
 
@@ -34,7 +36,7 @@ X-Device-Secret: <deviceSecret>
 设备连接只允许 PUBLISH / SUBSCRIBE 自身 `iot/{deviceId}/...` 话题：
 
 - 允许：`iot/90431b/cmd`、`iot/90431b/config`、`iot/90431b/config/report`、`iot/90431b/telemetry`、`iot/90431b/img/...`
-- 拒绝（网关层丢弃）：`iot/#`、`iot/{其他设备}/...`、`$SYS/#`
+- 拒绝(网关层丢弃)：`iot/#`、`iot/{其他设备}/...`、`$SYS/#`
 
 不要依赖“只订阅自己的话题”来保证安全；Broker 侧不提供额外 ACL，隔离由网关强制执行。
 
@@ -43,30 +45,30 @@ X-Device-Secret: <deviceSecret>
 
 设备端**不做器件语义假设**，一切由云端下发的物模型定义驱动：
 
-- **写入类设备**（继电器/风扇/舵机/灯带/DAC 等）→ 云端 `actuators[]` 定义，固件按其
-  `specs.transport`（`gpio` / `pwm` / `spi` / `led_strip` / `epd`）实例化硬件；控制命令
-  `value` 下发**传输原语**（电平/占空比/脉宽/数据帧/颜色分量），角度、颜色等语义
+- **写入类设备**(继电器/风扇/舵机/灯带/DAC 等)→ 云端 `actuators[]` 定义，固件按其
+  `specs.transport`(`gpio` / `pwm` / `spi` / `led_strip` / `epd`)实例化硬件；控制命令
+  `value` 下发**传输原语**(电平/占空比/脉宽/数据帧/颜色分量)，角度、颜色等语义
   换算由云端完成。
-- **读取类设备**（温度/湿度等传感器）→ 云端 `sensors[]` 定义，固件按其 `type`
-  匹配采集器读取并上报；`type` 无枚举限制（temperature/humidity/...）。
-- 后端 Actuator 的 `driver` 字段枚举固定（led/servo/speaker），固件**忽略该字段**，
+- **读取类设备**(温度/湿度等传感器)→ 云端 `sensors[]` 定义，固件按其 `type`
+  匹配采集器读取并上报；`type` 无枚举限制(temperature/humidity/...)。
+- 后端 Actuator 的 `driver` 字段枚举固定(led/servo/speaker)，固件**忽略该字段**，
   仅作为后端占位；设备类型一律以 `specs.transport` 为准。
 - 命令无 ack 回执：控制为 fire-and-forget，最终状态经遥测/配置回执体现。
 
 ## 协议总览
 
-设备状态 = 云端配置快照（唯一真源），动作 = 下行命令：
+设备状态 = 云端配置快照(唯一真源)，动作 = 下行命令：
 
 | 通道 | 方向 | 内容 |
 |---|---|---|
-| `iot/{id}/config` | 云端 → 设备 | 整体配置快照（retained，**订阅即拉取**；含执行器定义 `actuators`） |
-| `iot/{id}/config/report` | 设备 → 云端 | 配置回执（应用成功后，云端回写 `status=acked`） |
-| `iot/{id}/cmd` | 云端 → 设备 | 实时命令（控制执行器；离线由 HTTP `GET /commands` 兜底） |
-| `iot/{id}/telemetry` | 设备 → 云端 | 传感器遥测（`{"sensors":[...]}`，网关自动入库） |
+| `iot/{id}/config` | 云端 → 设备 | 整体配置快照(retained，**订阅即拉取**；含执行器定义 `actuators`) |
+| `iot/{id}/config/report` | 设备 → 云端 | 配置回执(应用成功后，云端回写 `status=acked`) |
+| `iot/{id}/cmd` | 云端 → 设备 | 实时命令(控制执行器；离线由 HTTP `GET /commands` 兜底) |
+| `iot/{id}/telemetry` | 设备 → 云端 | 传感器遥测(`{"sensors":[...]}`，网关自动入库) |
 
 ---
 
-## 一、配置快照（topic: `iot/{id}/config`，retained）
+## 一、配置快照(topic: `iot/{id}/config`，retained)
 
 平台 `POST /api/devices/{deviceId}/config` 或 `POST /sensors/apply` / `POST /actuators/apply`
 保存后，以 QoS1 + retained 发布最新快照：
@@ -75,18 +77,18 @@ X-Device-Secret: <deviceSecret>
 {"version": 4, "config": { "sensor": {...}, "sensors": [...], "actuators": [...], ... }}
 ```
 
-- `version`：递增的配置代数（云端按每次保存 +1）
-- `config.sensors`：传感器定义数组（物模型，固件按 type 采集上报）
-- `config.actuators`：**执行器定义数组（期望列表，唯一真源）**
-- `config.sensor.reportInterval`（秒）：传感器上报周期（默认 30s，范围 1–86400）
-- 其余分区（`network`/`camera`/`ota` 等）：设备当前不生效，但随 payload 原样持久化与回执
+- `version`：递增的配置代数(云端按每次保存 +1)
+- `config.sensors`：传感器定义数组(物模型，固件按 type 采集上报)
+- `config.actuators`：**执行器定义数组(期望列表，唯一真源)**
+- `config.sensor.reportInterval`(秒)：传感器上报周期(默认 30s，范围 1–86400)
+- 其余分区(`network`/`camera`/`ota` 等)：设备当前不生效，但随 payload 原样持久化与回执
 
-### 执行器定义（actuators[]）— transport 由 specs 自描述
+### 执行器定义(actuators[])— transport 由 specs 自描述
 
-> **字段名统一（2026）**：后端驱动参数已由 `config` 改名为 `specs`
-> （与 Sensor 定义体同名，DB 列 params→specs）；下发为**裁剪版**
-> （仅 `id/driver/specs/enabled`，无 `name/createdAt/updatedAt`）；空 specs 省略
-> （无 transport 无法实例化，等价移除）。
+> **字段名统一(2026)**：后端驱动参数已由 `config` 改名为 `specs`
+> (与 Sensor 定义体同名，DB 列 params→specs)；下发为**裁剪版**
+> (仅 `id/driver/specs/enabled`，无 `name/createdAt/updatedAt`)；空 specs 省略
+> (无 transport 无法实例化，等价移除)。
 
 ```json
 {"id":"fan1","driver":"servo","enabled":true,
@@ -95,42 +97,42 @@ X-Device-Secret: <deviceSecret>
 
 | 字段 | 说明 |
 |---|---|
-| `id` | 执行器标识符（`^[a-z][a-z0-9_]{0,10}$`）＝ 控制命令 `action` |
-| `driver` | 后端枚举占位（led/servo/speaker 三选一即可），**固件忽略** |
-| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip` / `epd`（固件注册表，可扩展） |
-| `specs.*` | transport 参数（见下） |
-| `enabled` | `false`（或缺省 true）→ 期望移除/不实例化 |
+| `id` | 执行器标识符(`^[a-z][a-z0-9_]{0,10}$`)＝ 控制命令 `action` |
+| `driver` | 后端枚举占位(led/servo/speaker 三选一即可)，**固件忽略** |
+| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip` / `epd`(固件注册表，可扩展) |
+| `specs.*` | transport 参数(见下) |
+| `enabled` | `false`(或缺省 true)→ 期望移除/不实例化 |
 
-固件处理规则（appcfg + periph diff 应用）：
+固件处理规则(appcfg + periph diff 应用)：
 
-1. 新版本 → NVS 持久化（version/payload/rpending）→ 逐条 diff：
-   - 新增 → probe 实例化（按 specs.transport 匹配驱动，引脚仲裁防冲突）
-   - transport/参数变化 → 重配置（remove 旧绑定 → 重新 probe）
+1. 新版本 → NVS 持久化(version/payload/rpending)→ 逐条 diff：
+   - 新增 → probe 实例化(按 specs.transport 匹配驱动，引脚仲裁防冲突)
+   - transport/参数变化 → 重配置(remove 旧绑定 → 重新 probe)
    - `enabled=false`、specs 非对象或缺失 `transport` → 移除
 2. 任一执行器 probe 失败 → **不发“已应用”回执**，保留 `rpending`，由周期任务
-   （上报循环）重试；重试成功后才发回执
-3. 已应用版本重投（retained/重连）→ 幂等；若仍有 `rpending`，先重试运行时效果再补发回执
-4. 重启 → `appcfg_replay()` 从 NVS 重放（不等云端推送）
+   (上报循环)重试；重试成功后才发回执
+3. 已应用版本重投(retained/重连)→ 幂等；若仍有 `rpending`，先重试运行时效果再补发回执
+4. 重启 → `appcfg_replay()` 从 NVS 重放(不等云端推送)
 
 各 transport 参数与命令原语：
 
 | transport | specs 参数 | 控制命令 value | 说明 |
 |---|---|---|---|
 | `gpio` | `pin` 必填；`active_high` 默认 true；`initial` 默认 0 | `{"level":1}` / `{"level":0}` / `{"toggle":true}` | 数字输出；逻辑电平按 active_high 映射物理电平 |
-| `pwm` | `pin` 必填；`freq_hz` 默认 1000 | `{"duty":80}`（0-100%）/ `{"pulse_us":1500}` | LEDC 输出；通道按引脚自动分配、timer 按频率共享；分辨率按频率自动推导 |
+| `pwm` | `pin` 必填；`freq_hz` 默认 1000 | `{"duty":80}`(0-100%)/ `{"pulse_us":1500}` | LEDC 输出；通道按引脚自动分配、timer 按频率共享；分辨率按频率自动推导 |
 | `spi` | `clk`/`mosi`/`cs` 必填；`miso` 可选；`freq_hz` 默认 1MHz；`mode` 默认 0 | `{"tx":"A5 3C FF"}` 或 `{"tx":[165,60,255]}` | SPI 主机写；同 host 总线引脚由首实例初始化、多设备独立 CS |
-| `led_strip` | `gpio` 默认 48；`count` 默认 1（可编译关闭） | `{"rgb":[255,0,0]}` | WS2812 灯带；rgb 原语作用于全部灯珠 |
-| `epd` | `size_inch` 屏幕英寸（展示用，固件忽略）；`width`/`height` 像素（宽为 8 的倍数）；`chip` 控制器型号（如 `ssd1683`）；`color_depth`：`bw` / `bwr` / `bwry` / `rgb565` / `rgb888` | `{"op":"selftest"}` | 墨水屏；面板固定接线，图片经 `iot/{id}/img/*` 二进制通道下发，不走命令原语 |
+| `led_strip` | `gpio` 默认 48；`count` 默认 1(可编译关闭) | `{"rgb":[255,0,0]}` | WS2812 灯带；rgb 原语作用于全部灯珠 |
+| `epd` | `size_inch` 屏幕英寸(展示用，固件忽略)；`width`/`height` 像素(宽为 8 的倍数)；`chip` 控制器型号(如 `ssd1683`)；`color_depth`：`bw` / `bwr` / `bwry` / `rgb565` / `rgb888` | `{"op":"selftest"}` | 墨水屏；面板固定接线，图片经 `iot/{id}/img/*` 二进制通道下发，不走命令原语 |
 
-> `epd` 的显示参数缺省时回退到编译期面板（兼容仅 `{"transport":"epd"}` 的存量定义）；
+> `epd` 的显示参数缺省时回退到编译期面板(兼容仅 `{"transport":"epd"}` 的存量定义)；
 > 当前固件内置 SSD1683 4.2" 400×300 BWR，`chip`/`width`/`height`/`color_depth` 与实物不符时
 > probe 失败并打日志。图片投递说明见 `components/img/include/img_recv.h`。
 
 > 角度/颜色等**器件语义由云端换算成原语后下发**：舵机类 → `pulse_us`，调色 → `rgb`。
 
-### 回执（topic: `iot/{id}/config/report`）
+### 回执(topic: `iot/{id}/config/report`)
 
-应用成功后发布（config 为**接收到的完整 config 原文**，含未生效字段，便于云端“期望 vs 实际”比对）：
+应用成功后发布(config 为**接收到的完整 config 原文**，含未生效字段，便于云端“期望 vs 实际”比对)：
 
 ```json
 {"version": 4, "config": { ... }}
@@ -141,7 +143,7 @@ X-Device-Secret: <deviceSecret>
 
 ---
 
-## 二、下行命令（topic: `iot/{id}/cmd`，QoS1）
+## 二、下行命令(topic: `iot/{id}/cmd`，QoS1)
 
 命令项与 HTTP `GET /commands` 返回项同构：
 
@@ -151,7 +153,7 @@ X-Device-Secret: <deviceSecret>
 
 | `type` | `payload` | 处理 |
 |---|---|---|
-| `config` | `{"version":N,"config":{...}}` | 与 retained 快照同解析（appcfg 状态机） |
+| `config` | `{"version":N,"config":{...}}` | 与 retained 快照同解析(appcfg 状态机) |
 | `control` | `{"action":<执行器id>,"value":{...}}` | 路由到对应 transport 执行 |
 
 控制示例：
@@ -164,50 +166,50 @@ X-Device-Secret: <deviceSecret>
 {"id":42,"type":"control","payload":{"action":"led1","value":{"rgb":[255,0,0]}}}    // led_strip
 ```
 
-未知 action / value 格式错误：固件丢弃并打日志（无回执，见设计原则）。
+未知 action / value 格式错误：固件丢弃并打日志(无回执，见设计原则)。
 
 ---
 
-## 三、遥测上报（topic: `iot/{id}/telemetry`）
+## 三、遥测上报(topic: `iot/{id}/telemetry`)
 
-按 `config.sensor.reportInterval`（秒）周期发布。**上报内容由云端 `sensors[]` 定义驱动**：
+按 `config.sensor.reportInterval`(秒)周期发布。**上报内容由云端 `sensors[]` 定义驱动**：
 
-> 下发为**裁剪版**（仅 `id/type/dataType/unit/specs/reportInterval/enabled`，
-> 无 `name/createdAt/updatedAt`；空 specs / 继承全局周期的 reportInterval 省略）。
+> 下发为**裁剪版**(仅 `id/type/dataType/unit/specs/reportInterval/enabled`，
+> 无 `name/createdAt/updatedAt`；空 specs / 继承全局周期的 reportInterval 省略)。
 > 传感器级 `specs` 为统一定义体：量程 `min/max/step`、枚举 `values`、文本 `maxLen`、
-> 告警阈值 `thresholds{min,max,…}` 与自由扩展键平铺于同一对象（原顶层
-> `thresholds`/`attrs` 已并入）。固件采集器仅需 `id/type/enabled/dataType`。
+> 告警阈值 `thresholds{min,max,…}` 与自由扩展键平铺于同一对象(原顶层
+> `thresholds`/`attrs` 已并入)。固件采集器仅需 `id/type/enabled/dataType`。
 
 > **上报值类型对齐**：平台按定义 `dataType` 校验上报值——`float/int` 必须为 number、
-> `bool` 必须为 true/false、`text`/`enum` 必须为字符串（enum 还须在 `specs.values`
-> 内）；类型不符的数据点会被平台**丢弃**。固件采集器产物须与 dataType 匹配
-> （sensor.c 已有源头自检），例如 bool 开关要产出 `true/false` 而非 0/1。
+> `bool` 必须为 true/false、`text`/`enum` 必须为字符串(enum 还须在 `specs.values`
+> 内)；类型不符的数据点会被平台**丢弃**。固件采集器产物须与 dataType 匹配
+> (sensor.c 已有源头自检)，例如 bool 开关要产出 `true/false` 而非 0/1。
 
 ```json
-// 云端定义（下发裁剪版）: {"sensors":[{"id":"temp1","type":"temperature","dataType":"float","enabled":true}]}
+// 云端定义(下发裁剪版): {"sensors":[{"id":"temp1","type":"temperature","dataType":"float","enabled":true}]}
 // 设备上报:
 {"sensors":[{"name":"temp1","type":"temperature","value":26.32}]}
 ```
 
 | 规则 | 说明 |
 |---|---|
-| `sensors[].name` | = 定义 `id`（平台据此与服务端物模型定义 join） |
-| `sensors[].type` | = 定义 `type`（后端无枚举限制；temperature/humidity/...） |
-| `value` | 由匹配 type 的固件采集器产出（number/string/bool） |
-| 无定义/全失败 | 该轮不上报（平台详情页显示"无数据"） |
-| 未知 type | 固件告警跳过该定义（采集器注册表可扩展：新增读类器件时注册新采集器） |
+| `sensors[].name` | = 定义 `id`(平台据此与服务端物模型定义 join) |
+| `sensors[].type` | = 定义 `type`(后端无枚举限制；temperature/humidity/...) |
+| `value` | 由匹配 type 的固件采集器产出(number/string/bool) |
+| 无定义/全失败 | 该轮不上报(平台详情页显示"无数据") |
+| 未知 type | 固件告警跳过该定义(采集器注册表可扩展：新增读类器件时注册新采集器) |
 
-内置采集器：`temperature`（ESP32 内部温度，两位小数）。其余读类器件
-（I2C/SPI 传感器等）按需在固件注册新采集器，云端无需改动。
+内置采集器：`temperature`(ESP32 内部温度，两位小数)。其余读类器件
+(I2C/SPI 传感器等)按需在固件注册新采集器，云端无需改动。
 
 ---
 
 ## 完整流程示例
 
-1. 平台：`POST /actuators` 创建执行器定义（driver 占位，specs.transport=pwm → 风扇）
-2. 平台：`POST /actuators/apply` → version+1 配置下发（MQTT retained + 命令队列）
+1. 平台：`POST /actuators` 创建执行器定义(driver 占位，specs.transport=pwm → 风扇)
+2. 平台：`POST /actuators/apply` → version+1 配置下发(MQTT retained + 命令队列)
 3. 设备：订阅即收到 → NVS 持久化 → periph 按 transport 实例化 → 回执 `config/report` → 云端 `acked`
 4. 平台：`POST /sensors/apply` → 设备按 type=temperature 采集并周期上报遥测
-5. 平台：`POST /commands`（type=control，action=fan1，value.duty）→ MQTT 实时到达 → PWM 输出
+5. 平台：`POST /commands`(type=control，action=fan1，value.duty)→ MQTT 实时到达 → PWM 输出
 6. 设备重启：NVS 重放执行器定义与上报周期，不等云端推送即恢复
-7. 配置变更：再次 Apply（新版本）→ 设备 diff 重配置；删除定义 → 设备卸载
+7. 配置变更：再次 Apply(新版本)→ 设备 diff 重配置；删除定义 → 设备卸载

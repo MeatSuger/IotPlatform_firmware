@@ -10,7 +10,7 @@
 
 #include "config.h"
 
-/* FreeRTOS.h 必须先包含（内核头有 #error 校验） */
+/* FreeRTOS.h 必须先包含(内核头有 #error 校验) */
 #include "freertos/FreeRTOS.h" /* IWYU pragma: keep */
 #include "freertos/task.h"
 #include "freertos/queue.h"

@@ -1,9 +1,8 @@
-#include "pwm_driver.h"
+#include "drivers/pwm_driver.h"
 
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "common.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "ledc_pool.h"
@@ -79,7 +78,7 @@ static bool pwm_command(periph_device_t *dev, const cJSON *pl)
     if (value == NULL || !cJSON_IsObject(value))
         return false;
 
-    /* pulse_us 优先（舵机类脉宽直给）；否则 duty 百分比 */
+    /* pulse_us 优先(舵机类脉宽直给)；否则 duty 百分比 */
     cJSON *pulse = cJSON_GetObjectItem(value, "pulse_us");
     if (cJSON_IsNumber(pulse) && pulse->valueint >= 0)
         return ledc_pool_set_pulse_us(p->pin, (uint32_t)pulse->valueint);

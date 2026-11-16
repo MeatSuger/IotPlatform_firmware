@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "esp_err.h"
-#include "fatfs_store.h" /* FATFS_MOUNT_POINT */
 
 #ifdef __cplusplus
 extern "C" {

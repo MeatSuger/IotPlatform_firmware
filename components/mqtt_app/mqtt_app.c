@@ -3,16 +3,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "common.h"
 #include "esp_crt_bundle.h" /* IDF bundled CA bundle */
 #include "esp_log.h"
-#include "img_recv.h" /* 图片接收（MQTT 直传 → FatFS → 墨水屏） */
+#include "img_recv.h" /* 图片接收(MQTT 直传 → FatFS → 墨水屏) */
 #include "token.h"
 
 /* esp-mqtt 未导出 MQTT_EVENTS base */
 ESP_EVENT_DECLARE_BASE(MQTT_EVENTS);
 
 static const char *TAG = "mqtt";
+
+/* 串行化 publish 与 destroy，避免恢复任务销毁客户端时发布方 use-after-free */
+static SemaphoreHandle_t s_lock;
+static mqtt_published_cb_t s_published_cb;
 
 static bool topic_matches(size_t topic_len, const char *topic,
                           const char *wanted) {
@@ -152,6 +159,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     break;
   }
 
+  case MQTT_EVENT_PUBLISHED:
+    if (s_published_cb != NULL && event->msg_id >= 0)
+      s_published_cb(event->msg_id);
+    break;
+
   case MQTT_EVENT_ERROR:
     ESP_LOGE(TAG, "MQTT error");
     g_isMQTTConnected = false;
@@ -177,6 +189,9 @@ static int img_reply(const char *text) {
 }
 
 esp_mqtt_client_handle_t mqtt_app_create(void) {
+  if (s_lock == NULL)
+    s_lock = xSemaphoreCreateMutex();
+
   /* keepalive 300s、重连 60s，减少 TLS 全握手 */
   esp_mqtt_client_config_t mqtt_cfg = {
       .broker =
@@ -240,24 +255,43 @@ void mqtt_app_start(esp_mqtt_client_handle_t client) {
 }
 
 void mqtt_app_destroy(esp_mqtt_client_handle_t client) {
-  if (client != NULL) {
-    esp_mqtt_client_stop(client);
-    esp_mqtt_client_destroy(client);
-  }
+  if (client == NULL)
+    return;
+
+  /* 先摘全局句柄再阻塞 stop，发布方拿到旧句柄前会先等锁 */
+  if (s_lock != NULL)
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+  if (g_mqttClient == client)
+    g_mqttClient = NULL;
+  if (s_lock != NULL)
+    xSemaphoreGive(s_lock);
+
+  esp_mqtt_client_stop(client);
+  esp_mqtt_client_destroy(client);
+}
+
+int mqtt_publish_qos(const char *topic, const char *payload, size_t len,
+                     int qos) {
+  if (topic == NULL || payload == NULL || s_lock == NULL)
+    return -1;
+
+  xSemaphoreTake(s_lock, portMAX_DELAY);
+  esp_mqtt_client_handle_t client = g_mqttClient;
+  int msg_id = -1;
+  if (g_isMQTTConnected && client != NULL)
+    msg_id = esp_mqtt_client_publish(client, topic, payload, (int)len, qos, 0);
+  xSemaphoreGive(s_lock);
+
+  if (msg_id >= 0)
+    ESP_LOGI(TAG, "MQTT published [msg_id=%d] to %s: %.*s", msg_id, topic,
+             (int)(len > 200 ? 200 : len), payload);
+  return msg_id;
 }
 
 bool mqtt_publish(const char *topic, const char *payload, size_t len) {
-  /* 快照句柄，防主任务并发 destroy 造成 use-after-free */
-  esp_mqtt_client_handle_t client = g_mqttClient;
+  return mqtt_publish_qos(topic, payload, len, 0) >= 0;
+}
 
-  if (!g_isMQTTConnected || client == NULL || topic == NULL || payload == NULL)
-    return false;
-
-  int msg_id = esp_mqtt_client_publish(client, topic, payload, len, 0, 0);
-  if (msg_id >= 0) {
-    ESP_LOGI(TAG, "MQTT published [msg_id=%d] to %s: %.*s", msg_id, topic,
-             (int)(len > 200 ? 200 : len), payload);
-    return true;
-  }
-  return false;
+void mqtt_app_set_published_cb(mqtt_published_cb_t cb) {
+  s_published_cb = cb;
 }

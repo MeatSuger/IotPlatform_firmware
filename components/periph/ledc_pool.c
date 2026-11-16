@@ -3,9 +3,7 @@
 #include <math.h>
 #include <stdint.h>
 
-#include "common.h"
 #include "esp_log.h"
-#include "driver/ledc.h"
 
 static const char *TAG = "ledc_pool";
 
@@ -15,6 +13,7 @@ typedef struct
     ledc_timer_t timer;
     uint32_t freq_hz;
     uint32_t resolution_bit;
+    int users; /* 绑定到该 timer 的通道数 */
 } ledc_timer_slot_t;
 
 typedef struct
@@ -62,6 +61,46 @@ static void pool_init(void)
         g_timers[i].timer = (ledc_timer_t)i;
         g_timers[i].freq_hz = 0;
         g_timers[i].resolution_bit = 0;
+        g_timers[i].users = 0;
+    }
+}
+
+/* 最后一个通道解绑后复位并归还 timer 槽，供其它频率复用 */
+static void timer_release(ledc_timer_t timer)
+{
+    for (int i = 0; i < LEDC_POOL_TIMERS; i++)
+    {
+        ledc_timer_slot_t *t = &g_timers[i];
+        if (!t->in_use || t->timer != timer)
+            continue;
+
+        if (t->users > 0 && --t->users > 0)
+            return;
+
+        ledc_timer_pause(LEDC_POOL_MODE, timer);
+        ledc_timer_rst(LEDC_POOL_MODE, timer);
+        t->in_use = false;
+        t->freq_hz = 0;
+        t->resolution_bit = 0;
+        return;
+    }
+}
+
+/* 仅回收无通道引用的 timer(channel_config 失败后的孤儿) */
+static void timer_drop_unused(ledc_timer_t timer)
+{
+    for (int i = 0; i < LEDC_POOL_TIMERS; i++)
+    {
+        ledc_timer_slot_t *t = &g_timers[i];
+        if (!t->in_use || t->timer != timer || t->users > 0)
+            continue;
+
+        ledc_timer_pause(LEDC_POOL_MODE, timer);
+        ledc_timer_rst(LEDC_POOL_MODE, timer);
+        t->in_use = false;
+        t->freq_hz = 0;
+        t->resolution_bit = 0;
+        return;
     }
 }
 
@@ -138,7 +177,12 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
                 .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
+            {
+                timer_drop_unused(tm->timer);
                 return -1;
+            }
+            timer_release(s->timer); /* 解绑旧 timer */
+            tm->users++;
             s->timer = tm->timer;
             return (int)s->channel;
         }
@@ -159,11 +203,15 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
                 .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
+            {
+                timer_drop_unused(tm->timer);
                 return -1;
+            }
 
             s->gpio = gpio;
             s->timer = tm->timer;
             s->in_use = true;
+            tm->users++;
             return (int)s->channel;
         }
     }
@@ -179,9 +227,10 @@ bool ledc_pool_release(int gpio)
         ledc_chan_slot_t *s = &g_channels[i];
         if (s->in_use && s->gpio == gpio)
         {
-            /* IDF 删通道不清 keep_alive 引用计数（ledc.c TODO），
+            /* IDF 删通道不清 keep_alive 引用计数(ledc.c TODO)，
              * 移除全部 PWM 后仍需重启才能释放睡眠电流 */
             ledc_stop(LEDC_POOL_MODE, s->channel, 0);
+            timer_release(s->timer);
             s->in_use = false;
             s->gpio = -1;
             s->timer = LEDC_TIMER_MAX;

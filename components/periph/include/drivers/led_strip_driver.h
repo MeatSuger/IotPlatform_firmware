@@ -3,8 +3,8 @@
 
 #include "periph.h"
 
-/* LED strip transport — WS2812 灯带（espressif/led_strip over RMT）。
- * PERIPH_LED_ENABLE 为编译开关（默认 1，置 0 整体编出，用于无 WS2812 的板子）；
+/* LED strip transport — WS2812 灯带(espressif/led_strip over RMT)。
+ * PERIPH_LED_ENABLE 为编译开关(默认 1，置 0 整体编出，用于无 WS2812 的板子)；
  * WS2812_GPIO / WS2812_LED_COUNT 为 config 缺省时的默认值。
  * Device config：{"transport":"led_strip","specs":{"gpio":48,"count":1}}
  * Control command：{"action":"led1","value":{"rgb":[255,0,0]}} — rgb 作用于全部灯珠。

@@ -1,9 +1,8 @@
-#include "led_strip_driver.h"
+#include "drivers/led_strip_driver.h"
 
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "common.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "led_strip.h"

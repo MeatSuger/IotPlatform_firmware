@@ -1,11 +1,9 @@
-#include "spi_driver.h"
+#include "drivers/spi_driver.h"
 
 #include <stdlib.h>
-#include <string.h>
 #include <stdint.h>
 #include <stddef.h>
 
-#include "common.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "driver/spi_master.h"
@@ -104,7 +102,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     }
     else if (g_clk != clk || g_mosi != mosi || g_miso != miso)
     {
-        /* 总线已由其它实例按不同引脚初始化：拒绝（保持单总线拓扑简单） */
+        /* 总线已由其它实例按不同引脚初始化：拒绝(保持单总线拓扑简单) */
         ESP_LOGE(TAG, "spi[%s]: 总线引脚与已初始化实例不一致", dev->name);
         periph_pin_release(cs);
         return false;
@@ -121,7 +119,7 @@ static bool spi_probe(periph_device_t *dev, const cJSON *cfg)
     {
         ESP_LOGE(TAG, "spi[%s]: spi_bus_add_device 失败", dev->name);
         periph_pin_release(cs);
-        g_bus_users--;
+        /* 本次未成功占用总线；仅在无其它用户时回收本实例初始化的 bus */
         if (g_bus_users == 0)
             bus_teardown();
         return false;
@@ -165,8 +163,8 @@ static void spi_remove(periph_device_t *dev)
     dev->drvdata = NULL;
 }
 
-/* tx 解析：优先数字数组 [165,60,...]，其次 hex 字符串（可含空格/逗号/制表符，
- * 必须成对字节）；非法返回 -1 */
+/* tx 解析：优先数字数组 [165,60,...]，其次 hex 字符串(可含空格/逗号/制表符，
+ * 必须成对字节)；非法返回 -1 */
 static int hex_val(char c)
 {
     if (c >= '0' && c <= '9')

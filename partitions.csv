@@ -1,10 +1,10 @@
 # ESP-IDF partition table — 16 MB flash layout (ESP32-S3-WROOM-1-N16R8).
 #
 # 在 IDF 自带 partitions_two_ota_large.csv 的布局上追加了一块 FAT 数据分区
-# （label = "storage"），供图片接收模块（components/img）落盘刷屏：
+# (label = "storage")，供图片接收模块(components/img)落盘刷屏：
 #   - nvs / otadata / phy_init / ota_0 / ota_1 的偏移与尺寸与原表完全一致，
 #     已部署设备的 OTA data 与 NVS 不受影响；
-#   - storage 位于两个 OTA 槽之后，带磨损均衡挂载到 /fatfs（见 fatfs_store.c）。
+#   - storage 位于两个 OTA 槽之后，带磨损均衡挂载到 /fatfs(见 fatfs_store.c)。
 #
 # 16 MB 空间分配：
 #   0x000000 - 0x008000  bootloader

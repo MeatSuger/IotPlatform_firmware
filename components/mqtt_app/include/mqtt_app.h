@@ -12,10 +12,10 @@
 extern esp_mqtt_client_handle_t g_mqttClient;
 extern volatile bool g_isMQTTConnected;
 
-/* 创建并配置客户端（不启动）；失败返回 NULL */
+/* 创建并配置客户端(不启动)；失败返回 NULL */
 esp_mqtt_client_handle_t mqtt_app_create(void);
 
-/* 启动客户端（异步连接） */
+/* 启动客户端(异步连接) */
 void mqtt_app_start(esp_mqtt_client_handle_t client);
 
 /* stop 在重连等待态最长阻塞 30s，只能在专用任务调用 */
@@ -23,5 +23,13 @@ void mqtt_app_destroy(esp_mqtt_client_handle_t client);
 
 /* 发布到任意主题 */
 bool mqtt_publish(const char *topic, const char *payload, size_t len);
+
+/* 指定 QoS 发布；返回 message id(>=0)，失败 -1。PUBACK 到达时触发回调 */
+int mqtt_publish_qos(const char *topic, const char *payload, size_t len,
+                     int qos);
+
+/* PUBACK 回调：msg_id 对应某次 QoS1 发布的报文标识 */
+typedef void (*mqtt_published_cb_t)(int msg_id);
+void mqtt_app_set_published_cb(mqtt_published_cb_t cb);
 
 #endif /* _MQTT_APP_H_ */

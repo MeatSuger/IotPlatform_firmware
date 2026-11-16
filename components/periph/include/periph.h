@@ -9,7 +9,7 @@
 typedef struct cJSON cJSON;
 typedef struct periph_device periph_device_t;
 
-/* 设备名缓冲上限（含终止符） */
+/* 设备名缓冲上限(含终止符) */
 #define PERIPH_NAME_MAX 12
 
 /* 引脚仲裁表容量 */
@@ -37,6 +37,7 @@ struct periph_device {
     char name[PERIPH_NAME_MAX];       /* 设备名 = 控制命令 action */
     const periph_driver_t *driver;    /* probe 时绑定的 transport */
     void *drvdata;                    /* 驱动私有数据 */
+    cJSON *specs;                     /* 上次成功 probe 的配置深拷贝 */
     struct periph_device *next;       /* 总线链表 */
 };
 
@@ -51,7 +52,7 @@ int periph_driver_register(periph_driver_t *drv);
 /* 按名查找设备，无则 NULL */
 periph_device_t *periph_device_find(const char *name);
 
-/* 创建或重配置设备；transport 取自 cfg->"transport"（driver 字段忽略） */
+/* 创建或重配置设备；transport 取自 cfg->"transport"(driver 字段忽略) */
 bool periph_device_add(const char *name, const char *transport,
                        const cJSON *cfg);
 
@@ -62,7 +63,7 @@ bool periph_device_remove(const char *name);
  * 最后移除不在期望列表中的设备 */
 bool periph_apply_config(const cJSON *actuators);
 
-/* 按 action 路由命令；value 只含传输原语（level/duty/pulse_us/tx/rgb） */
+/* 按 action 路由命令；value 只含传输原语(level/duty/pulse_us/tx/rgb) */
 bool periph_dispatch(const cJSON *pl);
 
 /* 引脚仲裁：同一引脚只允许一个设备；gpio < 0 视为未占用 */
