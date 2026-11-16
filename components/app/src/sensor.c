@@ -9,7 +9,7 @@
 
 static const char *TAG = "sensor";
 
-/* 内置 temperature 采集器：ESP32 内部温度传感器（esp_driver_tsens） */
+/* 内部温度传感器 */
 #if SOC_TEMP_SENSOR_SUPPORTED
 
 #include "driver/temperature_sensor.h"
@@ -30,7 +30,7 @@ static bool internal_temp_init(void)
         ESP_LOGE(TAG, "temperature_sensor_install failed: 0x%x", err);
         return false;
     }
-    /* 不在 init 时 enable：采样时才上电，两次上报间保持 disable 省 RTC 模拟域静态功耗 */
+    /* 采样时才上电，间隔内保持 disable 省电 */
     ESP_LOGI(TAG, "Temperature sensor ready");
     return true;
 }
@@ -40,9 +40,9 @@ static float read_internal_temp(void)
     float tsens_out = 0.0f;
     if (g_tempSensor == NULL) {
         ESP_LOGW(TAG, "Temperature sensor not initialized");
-        return NAN; /* 故障哨兵，与真实 0°C 读数区分 */
+        return NAN; /* 与真实 0°C 读数区分 */
     }
-    /* 占空比采样：enable → 读数 → disable（失败路径同样关闭） */
+    /* enable → 读 → disable */
     if (temperature_sensor_enable(g_tempSensor) != ESP_OK) {
         ESP_LOGE(TAG, "temperature_sensor_enable failed");
         return NAN;
@@ -56,13 +56,13 @@ static float read_internal_temp(void)
     return tsens_out;
 }
 
-/* temperature 采集器：value = 内部温度（两位小数）。def 暂不驱动行为 */
+/* 保留两位小数；def 未使用 */
 static cJSON *collect_temperature(const cJSON *def)
 {
     (void)def;
     float raw = read_internal_temp();
     if (isnan(raw))
-        return NULL; /* 本次采集失败：上报侧跳过该传感器 */
+        return NULL;
     double val = round((double)raw * 100.0) / 100.0;
     return cJSON_CreateNumber(val);
 }
@@ -78,7 +78,7 @@ static bool internal_temp_init(void)
 static cJSON *collect_temperature(const cJSON *def)
 {
     (void)def;
-    return NULL; /* 无内部温度传感器：该类型无可用采集器 */
+    return NULL; /* 芯片不支持 */
 }
 
 #endif /* SOC_TEMP_SENSOR_SUPPORTED */
@@ -126,9 +126,8 @@ static sensor_collect_fn collector_find(const char *type)
     return NULL;
 }
 
-/* dataType 源头自检（契约见 sensor.h 与 docs/mqtt-api.md 遥测章节）：float/int→number、
- * bool→true/false、text/enum→字符串，不符即跳过该点并告警，避免整条上报被平台丢弃；
- * 未声明或未知 dataType 放行（类型真源在平台，固件只做类型自检、不校验 enum 取值域）。 */
+/* 平台按 dataType 校验，不符的数据点会被整条丢弃，这里先跳过；
+ * 未声明或未知类型放行 */
 static bool value_matches_datatype(const cJSON *def, const cJSON *value)
 {
     const cJSON *dt = cJSON_GetObjectItem(def, "dataType");
@@ -153,7 +152,6 @@ bool sensor_init(void)
     return ok;
 }
 
-/* 按云端 sensors[] 定义采集并生成上报 JSON */
 char *sensor_build_report(const char *config_json)
 {
     if (config_json == NULL || config_json[0] == '\0')
@@ -181,9 +179,9 @@ char *sensor_build_report(const char *config_json)
         cJSON *type = cJSON_GetObjectItem(def, "type");
         cJSON *enabled = cJSON_GetObjectItem(def, "enabled");
         if (!cJSON_IsString(id) || !cJSON_IsString(type))
-            continue; /* 定义不完整 */
+            continue;
         if (cJSON_IsBool(enabled) && !cJSON_IsTrue(enabled))
-            continue; /* disabled */
+            continue;
 
         sensor_collect_fn fn = collector_find(type->valuestring);
         if (fn == NULL)
@@ -195,7 +193,7 @@ char *sensor_build_report(const char *config_json)
 
         cJSON *value = fn(def);
         if (value == NULL)
-            continue; /* 本次采集失败 */
+            continue;
 
         if (!value_matches_datatype(def, value))
         {

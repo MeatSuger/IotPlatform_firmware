@@ -6,11 +6,38 @@
 |---|---|
 | Broker (WSS) | `wss://api.meatsuger.top/api/ws/mqtt/broker` |
 | 用户名 | `90431b`（DEVICE_ID） |
-| 密码 | 设备 Token（`GET /api/devices/{deviceId}/token` 获取） |
+| 密码 | 设备 Token（`GET /api/devices/{deviceId}/token` 获取，需 Header `X-Device-Secret`） |
 | 订阅（命令） | `iot/90431b/cmd`（QoS1） |
 | 订阅（配置快照） | `iot/90431b/config`（QoS1 + retained） |
 | 发布（配置回执） | `iot/90431b/config/report`（QoS1） |
 | 发布（遥测） | `iot/90431b/telemetry` |
+
+## 设备引导与凭证
+
+1. 平台注册设备时返回 `deviceId` 与 `deviceSecret`（**只返回一次**，服务端仅保存 SHA-256）。
+2. 固件把二者写入 `components/core/include/config.h` 的 `DEVICE_ID` / `DEVICE_SECRET`。
+3. 首次启动（或 NVS Token 失效）时调用：
+
+```
+GET /api/devices/{deviceId}/token
+X-Device-Secret: <deviceSecret>
+```
+
+4. 拿到的 `deviceToken` 存入 NVS，作为 MQTT `password` 使用；后续启动复用，无需每次换取。
+
+> 仅凭设备 ID 不能换取 Token。属主轮换密钥（`POST /api/devices/{deviceId}/secret`）
+> 或删除设备会立即吊销旧 Token；此时固件会清空本地 Token，但**必须用新密钥重刷固件**
+> 才能再次完成引导。
+
+## 话题权限
+
+设备连接只允许 PUBLISH / SUBSCRIBE 自身 `iot/{deviceId}/...` 话题：
+
+- 允许：`iot/90431b/cmd`、`iot/90431b/config`、`iot/90431b/config/report`、`iot/90431b/telemetry`、`iot/90431b/img/...`
+- 拒绝（网关层丢弃）：`iot/#`、`iot/{其他设备}/...`、`$SYS/#`
+
+不要依赖“只订阅自己的话题”来保证安全；Broker 侧不提供额外 ACL，隔离由网关强制执行。
+
 
 ## 设计原则
 
@@ -80,8 +107,10 @@
    - 新增 → probe 实例化（按 specs.transport 匹配驱动，引脚仲裁防冲突）
    - transport/参数变化 → 重配置（remove 旧绑定 → 重新 probe）
    - `enabled=false`、specs 非对象或缺失 `transport` → 移除
-2. 已应用版本重投（retained/重连）→ 幂等忽略；回执未发出则补发
-3. 重启 → `appcfg_replay()` 从 NVS 重放（不等云端推送）
+2. 任一执行器 probe 失败 → **不发“已应用”回执**，保留 `rpending`，由周期任务
+   （上报循环）重试；重试成功后才发回执
+3. 已应用版本重投（retained/重连）→ 幂等；若仍有 `rpending`，先重试运行时效果再补发回执
+4. 重启 → `appcfg_replay()` 从 NVS 重放（不等云端推送）
 
 各 transport 参数与命令原语：
 
@@ -107,8 +136,8 @@
 {"version": 4, "config": { ... }}
 ```
 
-回执发布失败会保留本地 `rpending` 标志：重连（retained 重投）或周期任务自动补发；
-云端收到后回写 `reportedVersion/reportedPayload` 并置 `status=acked`。
+回执发布失败、或执行器 probe 失败时，会保留本地 `rpending` 标志：周期任务先重试
+运行时生效，成功后再补发；云端收到后回写 `reportedVersion/reportedPayload` 并置 `status=acked`。
 
 ---
 

@@ -1,6 +1,5 @@
-# ESP-IDF 用 xtensa 工具链交叉编译，clangd 18 没有 xtensa target。
-# 这里剥掉交叉编译专属参数、把 target 换成宿主 triple，只做语法/静态检查。
-# picolibc/include 只为补 sys/features.h 这类宏头（clangd 用宿主 libc）。
+# 宿主 clangd 不支持 xtensa，剥掉交叉参数，用宿主 triple 只做语法检查。
+# esp-clangd 不带内建头，resource-dir 借 esp-clang；picolibc 补 sys/features.h。
 CompileFlags:
   Remove:
     - -f*
@@ -13,10 +12,10 @@ CompileFlags:
     - -o*
   Add:
     - --target=x86_64-unknown-linux-gnu
+    - -resource-dir=/home/yu/.espressif/tools/esp-clang/esp-21.1.3_20260408/esp-clang/lib/clang/21
     - -D__XTENSA__
-    # 让 lwip/arch.h 走 <unistd.h> 分支，别自己 typedef int ssize_t
     - -DSSIZE_MAX=9223372036854775807L
-    - -isystem/home/yu/.espressif/tools/xtensa-esp-elf/esp-16.1.0_20260609/xtensa-esp-elf/picolibc/include
+    - -isystem/home/yu/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include
     - -Wall
     - -Wextra
     - -Wno-unknown-attributes

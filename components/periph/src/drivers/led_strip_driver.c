@@ -100,7 +100,7 @@ static bool led_strip_command(periph_device_t *dev, const cJSON *pl)
     if (value == NULL || !cJSON_IsObject(value))
         return false;
 
-    /* value.rgb 为原语，颜色语义由云端换算 */
+    /* 颜色换算在云端 */
     cJSON *rgb = cJSON_GetObjectItem(value, "rgb");
     if (!cJSON_IsArray(rgb) || cJSON_GetArraySize(rgb) != 3)
     {

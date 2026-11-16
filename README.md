@@ -20,6 +20,11 @@ ESP32-S3 设备固件，基于 ESP-IDF 构建，支持 WiFi 联网、MQTT 双向
   目标 2.4G WiFi 后用 ESP-Touch / AirKiss 应用广播 SSID/密码即可完成配网，凭据
   自动持久化，后续上电直连（重新配网：上电拉低 `GPIO4` 工厂复位，或
   `idf.py -p PORT erase-flash`）
+- **设备引导密钥**：首次取 Token 需 `DEVICE_SECRET`（注册设备时返回一次，写入
+  `components/core/include/config.h`）；仅凭设备 ID 不能换取凭证。NVS 中已有 Token
+  时复用，Token 失效/被吊销才用密钥重新认证
+- **MQTT 话题隔离**：设备连接只能发布/订阅 `iot/{自身ID}/...`；`iot/#`、跨设备
+  话题、`$SYS/#` 在网关层被丢弃（固件应只订阅自身配置/命令/图片话题）
 - **工厂复位**：上电时 `GPIO4`（内部上拉，悬空不复位）被拉低 → 擦除整个 NVS 分区
   （WiFi 凭据与已配网标记、设备 Token、云端配置快照/版本/待回执标志）并自动重启
   回到配网流程；墨水屏图片存于独立 FAT 分区不受影响。引脚定义与选型约束见
@@ -91,11 +96,13 @@ idf.py -p /dev/ttyUSB0 monitor
 
 ### 配置
 
-在 `sdkconfig.defaults` 或通过 `idf.py menuconfig` 设置：
+编译前确认 `components/core/include/config.h`：
 
-- WiFi SSID / 密码
-- MQTT Broker 地址
-- 设备注册服务器 URL
+- `DEVICE_ID`：注册响应中的 `deviceId`
+- `DEVICE_SECRET`：注册响应中的 `deviceSecret`（仅返回一次；换设备/重置后需同步更新）
+- `API_HOST` / `DEVICE_UPDATE_URL` / `MQTT_BROKER_PATH`：平台域名与接入路径
+
+WiFi 不预置 SSID/密码：首次上电进入 SmartConfig 配网，凭据由手机广播并持久化到 NVS。
 
 ## 依赖组件
 

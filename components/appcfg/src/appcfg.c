@@ -87,7 +87,7 @@ bool appcfg_report_pending(void)
     return s_reportPending;
 }
 
-/* 持久化成功后才更新内存态（崩溃安全：NVS 先行） */
+/* NVS 写成功后再更新内存 */
 static bool appcfg_persist(uint32_t version, const char *payload)
 {
     if (payload == NULL || strlen(payload) > APP_CFG_PAYLOAD_MAX)
@@ -135,12 +135,12 @@ void appcfg_report_sent(void)
     nvs_save_pending(false);
 }
 
-/* 运行时生效：sensor.reportInterval → g_reportIntervalMs，actuators[] →
- * periph_apply_config() diff 实例化/卸载；其余分区只持久化/回执（见 appcfg.h）。 */
-static void apply_runtime_effects(const cJSON *config)
+/* reportInterval → g_reportIntervalMs，actuators → periph；
+ * 返回 false 表示有执行器失败，不能回执 */
+static bool apply_runtime_effects(const cJSON *config)
 {
     if (config == NULL || !cJSON_IsObject(config))
-        return;
+        return true;
 
     const cJSON *sensor = cJSON_GetObjectItem(config, "sensor");
     const cJSON *ri = (sensor != NULL && cJSON_IsObject(sensor))
@@ -160,24 +160,28 @@ static void apply_runtime_effects(const cJSON *config)
         if (periph_apply_config(acts))
             ESP_LOGI(TAG, "[appcfg] actuators 已按期望列表收敛");
         else
+        {
             ESP_LOGW(TAG, "[appcfg] actuators 部分条目应用失败（详见 periph 日志）");
+            return false;
+        }
     }
+    return true;
 }
 
-/* 重放已持久化 payload 的运行时效果（开机恢复 / 新版本应用共用） */
-static void replay_payload(void)
+static bool replay_payload(void)
 {
     if (s_payload == NULL || s_payload[0] == '\0')
-        return;
+        return true;
 
     cJSON *cfg = cJSON_Parse(s_payload);
     if (cfg == NULL)
     {
         ESP_LOGE(TAG, "[appcfg] 持久化 payload 解析失败，跳过重放");
-        return;
+        return false;
     }
-    apply_runtime_effects(cfg);
+    bool ok = apply_runtime_effects(cfg);
     cJSON_Delete(cfg);
+    return ok;
 }
 
 void appcfg_replay(void)
@@ -186,10 +190,10 @@ void appcfg_replay(void)
         appcfg_init();
     ESP_LOGI(TAG, "[appcfg] replay runtime effects (version=%u)",
                   (unsigned)s_appliedVersion);
-    replay_payload();
+    if (!replay_payload())
+        ESP_LOGW(TAG, "[appcfg] 开机重放执行器失败，等待配置重试/重推");
 }
 
-/* 用内存中已应用 payload 原文发布回执（成功才清除待回执标志） */
 static void send_report(void)
 {
     if (s_payload == NULL)
@@ -220,8 +224,15 @@ static void send_report(void)
 
 void appcfg_flush_pending_report(void)
 {
-    if (s_reportPending)
-        send_report();
+    if (!s_reportPending)
+        return;
+    /* 先重放再回执，避免把未生效的配置报成已应用 */
+    if (!replay_payload())
+    {
+        ESP_LOGW(TAG, "[appcfg] 待回执重放仍失败，继续等待下次重试");
+        return;
+    }
+    send_report();
 }
 
 void appcfg_handle_config(uint32_t version, const cJSON *config)
@@ -241,7 +252,6 @@ void appcfg_handle_config(uint32_t version, const cJSON *config)
 
     if (version == s_appliedVersion && !s_reportPending)
     {
-        /* retained 重投的幂等分支：已应用且已回执，无需动作 */
         ESP_LOGI(TAG, "[appcfg] Config version=%u already applied & acked",
                       (unsigned)version);
         return;
@@ -259,10 +269,15 @@ void appcfg_handle_config(uint32_t version, const cJSON *config)
         }
         free(cfgStr);
         ESP_LOGI(TAG, "[appcfg] Applied config version=%u", (unsigned)version);
-        /* 统一从持久化 payload 重放运行时效果（与开机 appcfg_replay 同路径） */
-        replay_payload();
     }
 
-    /* version == applied 且待回执：保留重投 → 直接补发回执 */
+    /* 运行时未生效则保持 rpending，等周期任务重试 */
+    if (!replay_payload())
+    {
+        ESP_LOGE(TAG, "[appcfg] 配置已保存但运行时生效失败，保持待回执并重试 (version=%u)",
+                      (unsigned)version);
+        return;
+    }
+
     send_report();
 }

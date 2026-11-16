@@ -29,7 +29,7 @@ static ledc_timer_slot_t g_timers[LEDC_POOL_TIMERS];
 static ledc_chan_slot_t g_channels[LEDC_POOL_SLOTS];
 static bool g_inited = false;
 
-/* 由频率推导 duty 分辨率（bit），clamp 到 [1, 14] */
+/* duty 分辨率 bit，clamp [1,14] */
 static uint32_t resolution_for(uint32_t freq_hz)
 {
     if (freq_hz == 0)
@@ -65,7 +65,7 @@ static void pool_init(void)
     }
 }
 
-/* 复用同频已启用 timer；没有则占用一个空闲 timer 并配置 */
+/* 同频复用，否则占用空闲 timer */
 static ledc_timer_slot_t *timer_for(uint32_t freq_hz)
 {
     uint32_t res = resolution_for(freq_hz);
@@ -134,7 +134,7 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
                 .timer_sel = tm->timer,
                 .duty = 0,
                 .hpoint = 0,
-                /* 跨 light sleep 保持 PWM 输出：舵机维持位置/风扇不抖停 */
+                /* 跨 light sleep 保持输出 */
                 .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
             };
             if (ledc_channel_config(&ch) != ESP_OK)
@@ -179,9 +179,8 @@ bool ledc_pool_release(int gpio)
         ledc_chan_slot_t *s = &g_channels[i];
         if (s->in_use && s->gpio == gpio)
         {
-            /* 停止输出并回空闲低电平。IDF 驱动删除通道不清 keep_alive/xpd 引用
-             * 计数（ledc.c 有 TODO），全部 PWM 设备移除后仍需重启才能完全释放
-             * 睡眠保持电流——当前接受。 */
+            /* IDF 删通道不清 keep_alive 引用计数（ledc.c TODO），
+             * 移除全部 PWM 后仍需重启才能释放睡眠电流 */
             ledc_stop(LEDC_POOL_MODE, s->channel, 0);
             s->in_use = false;
             s->gpio = -1;

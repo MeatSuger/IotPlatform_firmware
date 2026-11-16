@@ -6,13 +6,9 @@
 
 #include "driver/ledc.h" /* LEDC_LOW_SPEED_MODE */
 
-/* LEDC channel/timer pool — PWM 资源管理：按 GPIO + 目标频率取通道，优先复用
- * 同频已启用的 timer，没有才配置空闲 timer（S3 只有 4 个 timer，通道 8 个）；
- * duty 分辨率由频率自动推导。所有 duty setter 立即生效。
- */
+/* LEDC 通道/定时器池：同频复用 timer，duty 分辨率按频率推导（S3: 4 timer / 8 channel） */
 
-/* timer 时钟源显式选 XTAL 40MHz：APB 不能跨 light sleep 保持，DFS 降频也会
- * 破坏波形；配 sleep_mode 后舵机/风扇可跨睡眠持续驱动 */
+/* XTAL 40MHz：APB 在 DFS/light sleep 下不稳定，PWM 需跨睡眠保持 */
 #define LEDC_POOL_MODE LEDC_LOW_SPEED_MODE
 #define LEDC_POOL_CLK_HZ (40U * 1000 * 1000)
 #define LEDC_POOL_SLOTS 8  /* LEDC_CHANNEL_MAX */

@@ -15,7 +15,7 @@ typedef struct
     bool active_high;
 } gpio_dev_t;
 
-/* 逻辑电平 → 物理电平（按 active_high 配置） */
+/* 逻辑 → 物理电平 */
 static int to_physical(const gpio_dev_t *g, int level)
 {
     return g->active_high ? level : (level ? 0 : 1);
@@ -31,7 +31,6 @@ static bool gpio_probe(periph_device_t *dev, const cJSON *cfg)
     }
     int gpio = pin->valueint;
 
-    /* 引脚仲裁：同引脚不得被多个设备占用 */
     if (gpio < 0)
         return false;
     if (!periph_pin_claim(gpio, dev->name))

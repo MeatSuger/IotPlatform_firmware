@@ -1,6 +1,5 @@
-// 显示器 transport 胶水：引脚仲裁 + 命令转发，驱动实现见 display 组件。
-// Device config：{"transport":"epd"}，可选 width/height/chip/color_depth 做一致性校验。
-// Control：{"action":"<id>","value":{"op":"selftest"}}。
+// epd transport 胶水：引脚仲裁 + 命令转发，驱动在 display 组件。
+// config: {"transport":"epd"}；control: {"value":{"op":"selftest"}}。
 
 #include "display_driver.h"
 

@@ -15,11 +15,11 @@
 
 static const char *TAG = "periph";
 
-/* 驱动注册表（总线）与设备链表 */
+/* 驱动链表与设备链表 */
 static periph_driver_t *g_drivers = NULL;
 static periph_device_t *g_devices = NULL;
 
-/* 引脚占用表（仲裁） */
+/* 引脚占用表 */
 static bool g_pin_taken[PERIPH_PIN_TABLE];
 
 bool periph_pin_claim(int gpio, const char *who)
@@ -83,7 +83,7 @@ periph_device_t *periph_device_find(const char *name)
     return NULL;
 }
 
-/* 匹配 transport、probe 并把新设备挂上总线；失败返回 NULL */
+/* probe 成功后挂到设备链表 */
 static periph_device_t *device_create(const char *name,
                                       const periph_driver_t *drv,
                                       const cJSON *cfg)
@@ -122,7 +122,7 @@ bool periph_device_add(const char *name, const char *transport,
         return false;
     }
 
-    /* 设备已存在：重配置 = 先 remove 旧绑定，再重新 probe */
+    /* 已存在则先 remove 再 probe */
     periph_device_t *dev = periph_device_find(name);
     if (dev != NULL)
     {
@@ -169,13 +169,9 @@ bool periph_device_remove(const char *name)
     return true;
 }
 
-/* 期望配置 diff 应用（DeviceConfig.payload.actuators）
- *
- * 设备类型由定义 specs.transport 决定；新增传输只需在固件注册驱动，
- * 云端/后端无需改动。字段名 specs：2026 后端 config→specs（DB 列 params→specs）。
- */
+/* 期望配置 diff 应用 */
 
-/* id 是否出现在期望启用列表中 */
+/* 是否在期望启用列表中 */
 static bool desired_active(const char *name, const cJSON *actuators)
 {
     const cJSON *item;
@@ -233,7 +229,7 @@ bool periph_apply_config(const cJSON *actuators)
             continue;
         }
 
-        /* 设备类型 = specs.transport（driver 占位，忽略） */
+        /* 类型 = specs.transport，driver 占位忽略 */
         cJSON *transport = cJSON_GetObjectItem(cfg, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring[0] == '\0')
         {
@@ -252,7 +248,7 @@ bool periph_apply_config(const cJSON *actuators)
         }
     }
 
-    /* 收敛：移除不在期望启用列表中的现存设备 */
+    /* 移除不在期望列表中的设备 */
     periph_device_t *d = g_devices;
     while (d != NULL)
     {
@@ -269,7 +265,7 @@ bool periph_apply_config(const cJSON *actuators)
     return all_ok;
 }
 
-/* 控制命令分发：action（设备名）→ 绑定 transport 的 ops->command */
+/* action（设备名）→ ops->command */
 bool periph_dispatch(const cJSON *pl)
 {
     if (pl == NULL)
@@ -295,7 +291,7 @@ static int driver_count(void)
     return n;
 }
 
-/* 注册内置 transport：gpio / pwm / spi / led_strip / epd */
+/* 注册内置 transport */
 void periph_bus_init(void)
 {
     periph_driver_register(&gpio_driver);

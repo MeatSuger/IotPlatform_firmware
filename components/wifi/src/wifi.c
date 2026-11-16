@@ -13,8 +13,7 @@
 
 static const char *TAG = "wifi";
 
-/* STA 状态：CONNECTING 已存网络连接中；PROVISIONING 无标记 → SmartConfig
- * 监听；UP 已拿到 IP。 */
+/* CONNECTING：连接已存网络；PROVISIONING：SmartConfig 监听；UP：已拿到 IP */
 typedef enum {
   WIFI_STA_CONNECTING = 0,
   WIFI_STA_PROVISIONING,
@@ -24,8 +23,7 @@ typedef enum {
 static volatile wifi_sta_state_t s_sta_state = WIFI_STA_CONNECTING;
 static bool s_prov_mode = false;
 
-/* 已配网标记：NVS namespace "wifi" / key "provisioned"。只在拿到 IP 之后置位，
- * 避免"配网成功但连不上"时把错误网络固化成下次直连对象。 */
+/* 拿到 IP 后才置位，避免把连不上的网络固化 */
 static bool prov_flag_read(void) {
   nvs_handle_t h;
   uint8_t v = 0;
@@ -47,7 +45,7 @@ static void prov_flag_write(void) {
   }
 }
 
-/* 启动 SmartConfig 监听：ESP-Touch + AirKiss（SC_TYPE_ESPTOUCH_AIRKISS） */
+/* ESP-Touch + AirKiss */
 static void start_smartconfig(void) {
   esp_err_t e = esp_smartconfig_set_type(SC_TYPE_ESPTOUCH_AIRKISS);
   if (e != ESP_OK) {
@@ -157,33 +155,30 @@ bool wifi_init_sta(void) {
   esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
   assert(sta_netif);
 
-  /* 事件组必须在 esp_wifi_start 之前创建：异步事件回调依赖它已存在 */
+  /* 事件回调依赖事件组，必须在 esp_wifi_start 前创建 */
   g_wifiEventGroup = xEventGroupCreate();
   if (g_wifiEventGroup == NULL) {
     ESP_LOGE(TAG, "Failed to create WiFi event group");
     return false;
   }
 
-  /* NVS 无"已配网"标记 → 本次 boot 进入 SmartConfig 配网模式 */
+  /* 无已配网标记则进配网模式 */
   s_prov_mode = !prov_flag_read();
   s_sta_state = s_prov_mode ? WIFI_STA_PROVISIONING : WIFI_STA_CONNECTING;
 
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-  /* 必须在 esp_wifi_start 之前关闭 PMK 缓存：规避 IDF 6.0 PMKSA
-   * NULL-deref 崩溃（espressif/esp-idf#15584） */
+  /* 规避 IDF 6.0 PMKSA NULL-deref 崩溃（espressif/esp-idf#15584） */
   esp_supplicant_disable_pmk_caching(true);
 
   ESP_ERROR_CHECK(esp_wifi_start());
 
   if (s_prov_mode) {
-    /* 配网监听期间必须关掉 modem-sleep（esp_wifi_set_ps(WIFI_PS_NONE)），
-       否则 promiscuous 收包漏帧；连上后按 PWR_SAVE_ENABLE 恢复
-       WIFI_PS_MIN_MODEM */
+    /* 配网时关 modem-sleep，否则 promiscuous 收包漏帧 */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     start_smartconfig();
   } else {
-    /* NVS 无有效 STA profile（异常清库）→ 自愈转配网模式 */
+    /* 有标记但无 STA profile（异常清库）→ 转配网 */
     wifi_config_t cur;
     bool profile_ok = (esp_wifi_get_config(WIFI_IF_STA, &cur) == ESP_OK &&
                        cur.sta.ssid[0] != '\0');
@@ -193,8 +188,7 @@ bool wifi_init_sta(void) {
       s_prov_mode = true;
       s_sta_state = WIFI_STA_PROVISIONING;
       ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-      esp_wifi_disconnect(); /* 取消 STA_START 的空配置连接尝试，避免与监听竞态
-                              */
+      esp_wifi_disconnect(); /* 取消空配置连接，避免与监听竞态 */
       start_smartconfig();
     }
   }
@@ -205,7 +199,7 @@ bool wifi_init_sta(void) {
   if (s_prov_mode) {
     ESP_LOGI(TAG,
              "SmartConfig provisioning mode — phone App: broadcast your WiFi");
-    /* 无限等待（portMAX_DELAY）：未配网设备保持监听直至手机广播凭据并连上 */
+    /* 阻塞直到手机广播凭据并连上 */
     EventBits_t bits = xEventGroupWaitBits(g_wifiEventGroup, WIFI_CONNECTED_BIT,
                                            pdFALSE, pdFALSE, portMAX_DELAY);
     ok = (bits & WIFI_CONNECTED_BIT) != 0;
@@ -220,7 +214,7 @@ bool wifi_init_sta(void) {
 
   if (ok) {
 #if PWR_SAVE_ENABLE
-    /* modem-sleep：射频按 DTIM 醒来收 AP 缓存的单播（详见 app_main 注释） */
+    /* modem-sleep：射频按 DTIM 醒来收缓存单播 */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 #else
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));

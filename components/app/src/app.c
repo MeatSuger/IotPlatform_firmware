@@ -11,25 +11,23 @@
 
 static const char *TAG = "app";
 
-/* sensorReportTask — Core 0 周期上报遥测：数据源为云端 sensors[] 定义（见 appcfg_payload），
- * 组装 {"sensors":[...]} 发布到 iot/{id}/telemetry；无定义/全部采集失败时跳过本轮，
- * 仅状态切换时告警一次（避免每周期刷日志）。
- */
+/* Core 0 周期上报遥测；无定义或采集失败时跳过本轮 */
+
 void sensorReportTask(void *pvParameters)
 {
     (void)pvParameters;
     ESP_LOGI(TAG, "[Core %d] Sensor report task started",
                 (int)xPortGetCoreID());
 
-    bool lastReportOk = true; /* 保证首次无定义时只打印一次 */
+    bool lastReportOk = true; /* 只告警一次 */
 
     for (;;)
     {
         EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
-        /* MQTT 未连接时跳过本轮，避免启动时序（WiFi 已连、MQTT 未 connected）刷出错误日志 */
+        /* MQTT 未连接时跳过，避免启动时序刷错误日志 */
         if ((bits & WIFI_CONNECTED_BIT) && g_isMQTTConnected)
         {
-            /* 配置回执兜底：应用成功但回执未发出时周期性补发 */
+            /* 周期补发待回执 */
             if (appcfg_report_pending())
                 appcfg_flush_pending_report();
 
@@ -52,10 +50,8 @@ void sensorReportTask(void *pvParameters)
     }
 }
 
-/* cmdProcessTask — Core 1 出队并分发后端消息：配置快照（version+config）→
- * appcfg_handle_config，控制命令（action = 执行器 id）→ periph_dispatch。执行器定义唯一真源
- * 是云端配置快照，设备类型由定义 specs.transport 决定，命令 value 为传输原语（语义换算在云端）。
- */
+/* Core 1 出队分发：配置走 appcfg，控制命令走 periph */
+
 void cmdProcessTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -78,9 +74,7 @@ void cmdProcessTask(void *pvParameters)
             continue;
         }
 
-        /* 入站信封归一化：配置快照原文 {"version":N,"config":{...}}（retained 主题
-         * iot/{id}/config）或后端信封 {"id":N,"type":...,"payload":{...}}（iot/{id}/cmd 实时、
-         * HTTP GET /commands 兜底）；解出内层 payload 后按内容分发（version+config / action）。 */
+        /* 兼容配置快照 {version,config} 与后端信封 {id,type,payload} */
         cJSON *sub = root;
         cJSON *envPayload = cJSON_GetObjectItem(root, "payload");
         if (envPayload != NULL && cJSON_IsObject(envPayload))
@@ -90,7 +84,7 @@ void cmdProcessTask(void *pvParameters)
         cJSON *cfgItem = cJSON_GetObjectItem(sub, "config");
         if (cJSON_IsNumber(verItem) && cJSON_IsObject(cfgItem))
         {
-            /* 配置快照：版本幂等 + NVS + 执行器 diff + 回执，见 appcfg */
+            /* 版本幂等、NVS、执行器 diff、回执都在 appcfg 内 */
             appcfg_handle_config((uint32_t)verItem->valuedouble, cfgItem);
             cJSON_Delete(root);
             continue;

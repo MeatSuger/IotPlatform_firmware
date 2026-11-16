@@ -39,10 +39,8 @@ static bool s_inited;
 static esp_pm_lock_handle_t s_pm_lock;
 static SemaphoreHandle_t s_lock;
 
-/* 一行逻辑数据 */
 static uint8_t *s_row_buf;
 
-/* SPI 故障粘滞标志 */
 static bool s_bus_failed;
 
 static SemaphoreHandle_t display_mutex(void) {
@@ -52,7 +50,7 @@ static SemaphoreHandle_t display_mutex(void) {
   return s_lock;
 }
 
-// ── 总线原语（供适配层调用）─────────────────────────────────
+/* 总线原语（供适配层调用） */
 static void display_bus_transmit(const void *buf, size_t len) {
   if (s_bus_failed) {
     return;
@@ -97,8 +95,7 @@ bool display_bus_wait_busy(bool busy_high, uint32_t timeout_ms,
     if (gpio_get_level(DISPLAY_PIN_BUSY) == busy_level) {
       saw_busy = true;
     } else if (saw_busy) {
-      break; // 忙完
-    }
+      break;     }
 
     const int64_t now = esp_timer_get_time();
     elapsed_ms = (uint32_t)((now - t0) / 1000);
@@ -122,7 +119,7 @@ bool display_bus_wait_busy(bool busy_high, uint32_t timeout_ms,
   return true;
 }
 
-// ── 引脚与总线 ─────────────────────────────────────────────
+/* 引脚与总线 */
 static bool display_gpio_init(void) {
   gpio_config_t out = {
       .pin_bit_mask = (1ULL << DISPLAY_PIN_DC) | (1ULL << DISPLAY_PIN_RST),
@@ -138,8 +135,7 @@ static bool display_gpio_init(void) {
   gpio_set_drive_capability(DISPLAY_PIN_DC, GPIO_DRIVE_CAP_2);
   gpio_set_drive_capability(DISPLAY_PIN_RST, GPIO_DRIVE_CAP_2);
 
-  // BUSY 给上拉：JD79665 的开漏输出必须有上拉；SSD1683 推挽驱动不受影响。
-  // 复位后按空闲电平判极性（上拉下 1=JD79665，0=SSD1683）。
+  // JD79665 开漏需上拉，SSD1683 推挽不受影响；复位后按空闲电平判极性
   gpio_config_t in = {
       .pin_bit_mask = (1ULL << DISPLAY_PIN_BUSY),
       .mode = GPIO_MODE_INPUT,
@@ -211,7 +207,7 @@ static void display_pm_unlock(void) {
 #endif
 }
 
-// ── 对外 API ───────────────────────────────────────────────
+/* 对外 API */
 const display_info_t *display_info(void) {
   static display_info_t info;
   if (s_ctrl == NULL) {
@@ -255,8 +251,7 @@ static esp_err_t display_bringup(void) {
     s_bus_ready = true;
   }
 
-  // 自动扫描：复位后读 BUSY 空闲电平判极性，再按候选顺序初始化
-  //   上拉下空闲为高 → 低电平忙的 JD79665；空闲为低 → 高电平忙的 SSD1683
+  // 复位后按 BUSY 空闲电平决定探测顺序
   gpio_set_level(DISPLAY_PIN_RST, 1);
   vTaskDelay(pdMS_TO_TICKS(20));
   gpio_set_level(DISPLAY_PIN_RST, 0);
@@ -383,7 +378,7 @@ esp_err_t display_show(display_read_t read_cb, void *ctx) {
   return err;
 }
 
-// 自检：按面板支持的颜色画等宽竖条
+// 按面板支持的颜色画竖彩条
 typedef struct {
   uint8_t colors[4];
   uint8_t count;

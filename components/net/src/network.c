@@ -14,13 +14,12 @@
 
 static const char *TAG = "net";
 
-/* HTTP 响应缓冲上限：须容纳命令队列结果信封 */
-/* HTTP 事件回调的 user_data：body + 捕获的 Set-Cookie 响应头 */
+/* HTTP 回调上下文：body + Set-Cookie */
 typedef struct {
     char  *data;
     int    len;
     int    cap;
-    char   set_cookie[512]; /* Token 提取优先级最高来源 */
+    char   set_cookie[512]; /* Token 优先从 Set-Cookie 取 */
 } http_resp_buf_t;
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -63,7 +62,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-/* 统一填充 HTTP 客户端默认配置（struct 较大，调用方堆分配 *cfg） */
+/* struct 较大，cfg 由调用方堆分配 */
 static void make_http_config(esp_http_client_config_t *cfg,
                              const char *url,
                              http_resp_buf_t *rbuf)
@@ -78,9 +77,7 @@ static void make_http_config(esp_http_client_config_t *cfg,
     };
 }
 
-/* 解析平台统一响应信封 {"code":N,"message":..,"data":..} 的业务码
- * （back/api/swagger/API.md §2.1）：所有接口（含业务错误）都返回 HTTP 200，
- * 成功与否只能看 body.code；body 非法/结构不符返回 -1。 */
+/* 所有接口都返回 HTTP 200，业务结果看 body.code；非法 body 返回 -1 */
 static int parse_api_code(const char *body)
 {
     if (body == NULL || body[0] == '\0')
@@ -100,13 +97,13 @@ static int parse_api_code(const char *body)
     return ret;
 }
 
-/* 设备认证：DeviceIDAuth 换 Token；先试 Set-Cookie，再回退 JSON body。 */
+/* 设备 ID + 引导密钥换 Token：先试 Set-Cookie，再回退 body */
 bool authbydeviceid(void)
 {
 
     ESP_LOGI(TAG, "Starting device authentication...");
 
-    /* 主任务栈仅 3584 B，所有大缓冲一律堆分配 */
+    /* 主任务栈小，大缓冲一律堆分配 */
     char *buf_data = malloc(NET_HTTP_OUTPUT_MAX);
     http_resp_buf_t *rbuf = malloc(sizeof(http_resp_buf_t));
     esp_http_client_config_t *cfg = malloc(sizeof(esp_http_client_config_t));
@@ -120,6 +117,7 @@ bool authbydeviceid(void)
     make_http_config(cfg, TOKEN_URL, rbuf);
     ESP_LOGD(TAG, "HTTP URL = [%s]", cfg->url);
     esp_http_client_handle_t http = esp_http_client_init(cfg);
+    esp_http_client_set_header(http, "X-Device-Secret", DEVICE_SECRET);
 
     esp_err_t err = esp_http_client_perform(http);
     if (err != ESP_OK) {
@@ -133,7 +131,7 @@ bool authbydeviceid(void)
 
     ESP_LOGD(TAG, "HTTP status: %d", httpCode);
 
-    /* 统一信封：HTTP 200 + code==200 才算业务成功 */
+    /* HTTP 200 + code==200 才算成功 */
     if (httpCode == 200 && parse_api_code(rbuf->data) == 200) {
         ESP_LOGI(TAG, "Login request successful");
 
@@ -184,8 +182,7 @@ bool authbydeviceid(void)
     return authSuccess;
 }
 
-/* 上报面板芯片/分辨率：POST /devices/{id}/update（设备 Token）。
- * 后端若无对应列会忽略未知字段并返回 200，故打印业务码便于发现未落库。 */
+/* 未知字段后端会忽略并返回 200，打印业务码便于发现未落库 */
 bool reportPanelInfo(void)
 {
     const char *chip = display_chip_id();
@@ -265,9 +262,7 @@ bool reportPanelInfo(void)
     return ok;
 }
 
-/* 兜底轮询平台命令队列（HTTP GET /commands，与 MQTT iot/{id}/cmd 实时通道互补）。
- * 拉取即消费：必须按 id 升序逐条入队（保证 config/control 时序），只取最新一条
- * 会静默丢弃离线期间累积的控制命令。 */
+/* 拉取即消费，必须按 id 升序入队，否则会丢离线命令 */
 bool syncPendingCommands(void)
 {
     char *token = token_load();
@@ -303,7 +298,7 @@ bool syncPendingCommands(void)
     esp_http_client_cleanup(http);
     free(token);
 
-    /* 业务结果看 body.code（HTTP 200 仅代表到达） */
+    /* HTTP 200 只代表到达 */
     int apiCode = parse_api_code(rbuf->data);
     if (httpCode != 200 || apiCode != 200) {
         ESP_LOGW(TAG, "Sync: http=%d code=%d body=%.160s",
@@ -364,7 +359,7 @@ bool syncPendingCommands(void)
         cmdMsg.payload = cmdStr;
         cmdMsg.length = strlen(cmdStr);
 
-        /* 队列满：已入队部分仍会被消费，丢弃剩余并退出，避免永久死锁 */
+        /* 队列满则丢弃剩余，避免死锁 */
         if (xQueueSend(g_commandQueue, &cmdMsg, pdMS_TO_TICKS(5000)) != pdPASS) {
             ESP_LOGW(TAG, "Sync: queue full, dropping remaining commands");
             free(cmdStr);
@@ -378,7 +373,7 @@ bool syncPendingCommands(void)
     return enqueued > 0;
 }
 
-/* 从 Set-Cookie 取 X-Device-Token；返回 malloc 串，未找到返回 NULL。 */
+/* 从 Set-Cookie 取 X-Device-Token，返回 malloc 串 */
 char *extractTokenFromHeader(const char *setCookieHeader)
 {
     const char *key = "X-Device-Token=";
@@ -398,10 +393,7 @@ char *extractTokenFromHeader(const char *setCookieHeader)
     return token;
 }
 
-/* extractTokenFromBody — Pull the device token from a JSON login response.
- *
- * Returns: malloc'd token from data.deviceToken, or NULL on parse failure.
- */
+/* 从 body.data.deviceToken 取 Token */
 char *extractTokenFromBody(const char *jsonBody)
 {
     cJSON *root = cJSON_Parse(jsonBody);
