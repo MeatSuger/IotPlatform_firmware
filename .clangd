@@ -1,5 +1,5 @@
-# 宿主 clangd 不支持 xtensa，剥掉交叉参数，用宿主 triple 只做语法检查。
-# esp-clangd 不带内建头，resource-dir 借 esp-clang；picolibc 补 sys/features.h。
+# 宿主 clangd 不支持 xtensa,剥掉交叉参数,用宿主 triple 只做语法检查。
+# esp-clangd 不带内建头,resource-dir 借 esp-clang；picolibc 补 sys/features.h。
 CompileFlags:
   Remove:
     - -f*

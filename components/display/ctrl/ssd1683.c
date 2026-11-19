@@ -85,7 +85,7 @@ static esp_err_t ssd_init(void) {
   display_bus_cmd(0x12); // 软复位
   display_bus_wait_busy(true, 5000, "soft-reset");
 
-  // 0x21：A[7:4]=Red RAM，A[3:0]=BW。三色屏必须 Normal(0x00)，0x40 会让红平面恒 0
+  // 0x21：A[7:4]=Red RAM,A[3:0]=BW。三色屏必须 Normal(0x00),0x40 会让红平面恒 0
   display_bus_cmd(0x21);
   display_bus_data(0x00);
   display_bus_data(0x00);

@@ -28,7 +28,7 @@ static ledc_timer_slot_t g_timers[LEDC_POOL_TIMERS];
 static ledc_chan_slot_t g_channels[LEDC_POOL_SLOTS];
 static bool g_inited = false;
 
-/* duty 分辨率 bit，clamp [1,14] */
+/* duty 分辨率 bit,clamp [1,14] */
 static uint32_t resolution_for(uint32_t freq_hz)
 {
     if (freq_hz == 0)
@@ -65,7 +65,7 @@ static void pool_init(void)
     }
 }
 
-/* 最后一个通道解绑后复位并归还 timer 槽，供其它频率复用 */
+/* 最后一个通道解绑后复位并归还 timer 槽,供其它频率复用 */
 static void timer_release(ledc_timer_t timer)
 {
     for (int i = 0; i < LEDC_POOL_TIMERS; i++)
@@ -104,7 +104,7 @@ static void timer_drop_unused(ledc_timer_t timer)
     }
 }
 
-/* 同频复用，否则占用空闲 timer */
+/* 同频复用,否则占用空闲 timer */
 static ledc_timer_slot_t *timer_for(uint32_t freq_hz)
 {
     uint32_t res = resolution_for(freq_hz);
@@ -157,7 +157,7 @@ int ledc_pool_acquire(int gpio, uint32_t freq_hz)
     if (tm == NULL)
         return -1;
 
-    /* 引脚已持有：同频直接返回，异频重绑 timer */
+    /* 引脚已持有：同频直接返回,异频重绑 timer */
     for (int i = 0; i < LEDC_POOL_SLOTS; i++)
     {
         ledc_chan_slot_t *s = &g_channels[i];
@@ -227,7 +227,7 @@ bool ledc_pool_release(int gpio)
         ledc_chan_slot_t *s = &g_channels[i];
         if (s->in_use && s->gpio == gpio)
         {
-            /* IDF 删通道不清 keep_alive 引用计数(ledc.c TODO)，
+            /* IDF 删通道不清 keep_alive 引用计数(ledc.c TODO),
              * 移除全部 PWM 后仍需重启才能释放睡眠电流 */
             ledc_stop(LEDC_POOL_MODE, s->channel, 0);
             timer_release(s->timer);

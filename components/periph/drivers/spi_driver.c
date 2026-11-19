@@ -16,7 +16,7 @@ typedef struct
     spi_device_handle_t handle;
 } spi_dev_t;
 
-/* 总线级共享状态：首实例初始化并占总线引脚，末实例释放 */
+/* 总线级共享状态：首实例初始化并占总线引脚,末实例释放 */
 static bool g_bus_up = false;
 static int g_clk = -1, g_mosi = -1, g_miso = -1;
 static int g_bus_users = 0;
@@ -163,7 +163,7 @@ static void spi_remove(periph_device_t *dev)
     dev->drvdata = NULL;
 }
 
-/* tx 解析：优先数字数组 [165,60,...]，其次 hex 字符串(可含空格/逗号/制表符，
+/* tx 解析：优先数字数组 [165,60,...],其次 hex 字符串(可含空格/逗号/制表符,
  * 必须成对字节)；非法返回 -1 */
 static int hex_val(char c)
 {

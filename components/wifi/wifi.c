@@ -24,10 +24,10 @@ static volatile wifi_sta_state_t s_sta_state = WIFI_STA_CONNECTING;
 static bool s_prov_mode = false;
 static int s_connect_failures = 0;
 
-/* 配网凭据连不上(密码错/AP 不在)时重新广播，避免永久卡死 */
+/* 配网凭据连不上(密码错/AP 不在)时重新广播,避免永久卡死 */
 #define WIFI_PROV_CONNECT_ATTEMPTS 3
 
-/* 拿到 IP 后才置位，避免把连不上的网络固化 */
+/* 拿到 IP 后才置位,避免把连不上的网络固化 */
 static bool prov_flag_read(void) {
   nvs_handle_t h;
   uint8_t v = 0;
@@ -116,7 +116,7 @@ static void smartconfig_event_handler(void *arg, esp_event_base_t event_base,
   switch (event_id) {
   case SC_EVENT_GOT_SSID_PSWD:
     if (s_sta_state != WIFI_STA_PROVISIONING)
-      break; /* 已停止配网的迟到事件，忽略 */
+      break; /* 已停止配网的迟到事件,忽略 */
     {
       const smartconfig_event_got_ssid_pswd_t *ev =
           (const smartconfig_event_got_ssid_pswd_t *)event_data;
@@ -143,7 +143,7 @@ static void smartconfig_event_handler(void *arg, esp_event_base_t event_base,
 
   case SC_EVENT_SEND_ACK_DONE:
     ESP_LOGI(TAG, "SmartConfig: ACK sent to phone");
-    esp_smartconfig_stop(); /* 必须先停，释放 SmartConfig 占用 */
+    esp_smartconfig_stop(); /* 必须先停,释放 SmartConfig 占用 */
     break;
 
   default:
@@ -172,7 +172,7 @@ bool wifi_init_sta(void) {
   esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
   assert(sta_netif);
 
-  /* 事件回调依赖事件组，必须在 esp_wifi_start 前创建 */
+  /* 事件回调依赖事件组,必须在 esp_wifi_start 前创建 */
   g_wifiEventGroup = xEventGroupCreate();
   if (g_wifiEventGroup == NULL) {
     ESP_LOGE(TAG, "Failed to create WiFi event group");
@@ -191,7 +191,7 @@ bool wifi_init_sta(void) {
   ESP_ERROR_CHECK(esp_wifi_start());
 
   if (s_prov_mode) {
-    /* 配网时关 modem-sleep，否则 promiscuous 收包漏帧 */
+    /* 配网时关 modem-sleep,否则 promiscuous 收包漏帧 */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     start_smartconfig();
   } else {
@@ -205,7 +205,7 @@ bool wifi_init_sta(void) {
       s_prov_mode = true;
       s_sta_state = WIFI_STA_PROVISIONING;
       ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-      esp_wifi_disconnect(); /* 取消空配置连接，避免与监听竞态 */
+      esp_wifi_disconnect(); /* 取消空配置连接,避免与监听竞态 */
       start_smartconfig();
     }
   }

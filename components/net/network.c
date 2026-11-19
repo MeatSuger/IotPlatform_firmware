@@ -16,7 +16,7 @@
 
 static const char *TAG = "net";
 
-/* 响应体硬上限：超过即失败，绝不静默截断 */
+/* 响应体硬上限：超过即失败,绝不静默截断 */
 #define NET_HTTP_RESPONSE_MAX (64 * 1024)
 
 /* HTTP 回调上下文：可增长 body + Set-Cookie */
@@ -103,7 +103,7 @@ static void resp_buf_free(http_resp_buf_t *rb)
     free(rb);
 }
 
-/* 统一 GET/POST：header_key 为空表示不带认证头，body 非空则 POST JSON。
+/* 统一 GET/POST：header_key 为空表示不带认证头,body 非空则 POST JSON。
  * 成功返回 ESP_OK 并交出 rb(调用方 resp_buf_free)；响应超限也按失败处理。 */
 static esp_err_t http_request(const char *url, const char *header_key,
                               const char *header_val, const char *body,
@@ -157,7 +157,7 @@ static esp_err_t http_request(const char *url, const char *header_key,
     return ESP_OK;
 }
 
-/* 设备 ID + 引导密钥换 Token：先试 Set-Cookie，再回退 body */
+/* 设备 ID + 引导密钥换 Token：先试 Set-Cookie,再回退 body */
 bool authbydeviceid(void)
 {
     ESP_LOGI(TAG, "Starting device authentication...");
@@ -215,7 +215,7 @@ bool authbydeviceid(void)
     return authSuccess;
 }
 
-/* 未知字段后端会忽略并返回 200，打印业务码便于发现未落库 */
+/* 未知字段后端会忽略并返回 200,打印业务码便于发现未落库 */
 bool reportPanelInfo(void)
 {
     const char *chip = display_chip_id();
@@ -271,7 +271,7 @@ bool reportPanelInfo(void)
     return ok;
 }
 
-/* 拉取即消费，必须按 id 升序入队，否则会丢离线命令 */
+/* 拉取即消费,必须按 id 升序入队,否则会丢离线命令 */
 bool syncPendingCommands(void)
 {
     char *token = token_load();
@@ -352,7 +352,7 @@ bool syncPendingCommands(void)
         cmdMsg.payload = cmdStr;
         cmdMsg.length = strlen(cmdStr);
 
-        /* 队列满则丢弃剩余，避免死锁 */
+        /* 队列满则丢弃剩余,避免死锁 */
         if (xQueueSend(g_commandQueue, &cmdMsg, pdMS_TO_TICKS(5000)) != pdPASS) {
             ESP_LOGW(TAG, "Sync: queue full, dropping remaining commands");
             free(cmdStr);

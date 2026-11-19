@@ -1,4 +1,4 @@
-// epd transport 胶水：引脚仲裁 + 命令转发，驱动在 display 组件。
+// epd transport 胶水：引脚仲裁 + 命令转发,驱动在 display 组件。
 // config: {"transport":"epd"}；control: {"value":{"op":"selftest"}}。
 
 #include "drivers/display_driver.h"
@@ -115,7 +115,7 @@ static bool display_probe(periph_device_t *dev, const cJSON *cfg) {
 }
 
 static void display_remove(periph_device_t *dev) {
-  (void)dev; // 板载固定外设，保持引脚与总线占用
+  (void)dev; // 板载固定外设,保持引脚与总线占用
 }
 
 static bool display_command(periph_device_t *dev, const cJSON *pl) {

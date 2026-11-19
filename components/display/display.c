@@ -1,4 +1,4 @@
-// 显示调度层：SPI 总线、互斥、PM 锁、BUSY 等待，按逻辑 2bpp 流式喂给适配层。
+// 显示调度层：SPI 总线、互斥、PM 锁、BUSY 等待,按逻辑 2bpp 流式喂给适配层。
 
 #include "display.h"
 
@@ -18,7 +18,7 @@
 
 static const char *TAG = "display";
 
-/* 面板自动扫描：按顺序探测，第一个初始化成功即当前面板。
+/* 面板自动扫描：按顺序探测,第一个初始化成功即当前面板。
  * 新增面板在此登记；两颗都能初始化时需给 init() 加可区分签名。 */
 static const display_ctrl_t *const s_ctrls[] = {
     &display_ctrl_ssd1683_4in2,
@@ -133,7 +133,7 @@ static bool display_gpio_init(void) {
   gpio_set_drive_capability(DISPLAY_PIN_DC, GPIO_DRIVE_CAP_2);
   gpio_set_drive_capability(DISPLAY_PIN_RST, GPIO_DRIVE_CAP_2);
 
-  // JD79665 开漏需上拉，SSD1683 推挽不受影响；复位后按空闲电平判极性
+  // JD79665 开漏需上拉,SSD1683 推挽不受影响；复位后按空闲电平判极性
   gpio_config_t in = {
       .pin_bit_mask = (1ULL << DISPLAY_PIN_BUSY),
       .mode = GPIO_MODE_INPUT,
@@ -301,7 +301,7 @@ static esp_err_t display_bringup(void) {
     return ESP_ERR_NO_MEM;
   }
 
-  ESP_LOGI(TAG, "%s ready: %ux%u，整帧 %u 字节", s_ctrl->name,
+  ESP_LOGI(TAG, "%s ready: %ux%u,整帧 %u 字节", s_ctrl->name,
            (unsigned)s_ctrl->width, (unsigned)s_ctrl->height,
            (unsigned)display_frame_bytes());
   return ESP_OK;
@@ -362,7 +362,7 @@ esp_err_t display_show(display_read_t read_cb, void *ctx) {
   }
   if (err == ESP_OK) {
     err = s_ctrl->flush();
-    ESP_LOGI(TAG, "刷新%s，%u ms", err == ESP_OK ? "完成" : "失败",
+    ESP_LOGI(TAG, "刷新%s,%u ms", err == ESP_OK ? "完成" : "失败",
              (unsigned)((esp_timer_get_time() - t0) / 1000));
   }
   if (err == ESP_OK) {

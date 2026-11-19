@@ -103,7 +103,7 @@ static periph_device_t *device_create(const char *name,
         return NULL;
     }
 
-    /* 深拷贝用于后续 diff，失败只影响去重效率 */
+    /* 深拷贝用于后续 diff,失败只影响去重效率 */
     dev->specs = cJSON_Duplicate(cfg, 1);
     dev->next = g_devices;
     g_devices = dev;
@@ -123,7 +123,7 @@ bool periph_device_add(const char *name, const char *transport,
         return false;
     }
 
-    /* 配置未变化则不重配，避免周期重放把执行器输出复位 */
+    /* 配置未变化则不重配,避免周期重放把执行器输出复位 */
     periph_device_t *dev = periph_device_find(name);
     if (dev != NULL)
     {
@@ -203,7 +203,7 @@ bool periph_apply_config(const cJSON *actuators)
 {
     if (actuators == NULL || !cJSON_IsArray(actuators))
     {
-        ESP_LOGE(TAG, "periph: actuators 期望列表非法(非数组)，忽略");
+        ESP_LOGE(TAG, "periph: actuators 期望列表非法(非数组),忽略");
         return false;
     }
 
@@ -231,7 +231,7 @@ bool periph_apply_config(const cJSON *actuators)
         {
             if (!periph_device_remove(name) && active)
             {
-                ESP_LOGE(TAG, "periph: 执行器 '%s' 定义非法，无法实例化", name);
+                ESP_LOGE(TAG, "periph: 执行器 '%s' 定义非法,无法实例化", name);
                 all_ok = false;
             }
             else
@@ -241,11 +241,11 @@ bool periph_apply_config(const cJSON *actuators)
             continue;
         }
 
-        /* 类型 = specs.transport，driver 占位忽略 */
+        /* 类型 = specs.transport,driver 占位忽略 */
         cJSON *transport = cJSON_GetObjectItem(cfg, "transport");
         if (!cJSON_IsString(transport) || transport->valuestring[0] == '\0')
         {
-            ESP_LOGW(TAG, "periph: 执行器 '%s' 缺少 specs.transport，移除",
+            ESP_LOGW(TAG, "periph: 执行器 '%s' 缺少 specs.transport,移除",
                           name);
             periph_device_remove(name);
             all_ok = false;

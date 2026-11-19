@@ -10,7 +10,7 @@ extern "C" {
 #define FATFS_MOUNT_POINT "/fatfs"
 #define FATFS_PARTITION_LABEL "storage"
 
-/* 挂载 storage 分区到 FATFS_MOUNT_POINT，调用方保证幂等 */
+/* 挂载 storage 分区到 FATFS_MOUNT_POINT,调用方保证幂等 */
 esp_err_t fatfs_store_mount(void);
 
 #ifdef __cplusplus

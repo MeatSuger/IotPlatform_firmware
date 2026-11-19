@@ -22,7 +22,7 @@ int parse_api_code(const char *body)
     return ret;
 }
 
-/* 从 Set-Cookie 取 X-Device-Token，返回 malloc 串 */
+/* 从 Set-Cookie 取 X-Device-Token,返回 malloc 串 */
 char *extractTokenFromHeader(const char *setCookieHeader)
 {
     const char *key = "X-Device-Token=";

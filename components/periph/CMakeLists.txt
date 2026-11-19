@@ -1,5 +1,5 @@
 # periph 组件：外设总线 + 执行器驱动(gpio/pwm/spi/led_strip)+ 板载显示器 transport 胶水层。
-# 头文件：periph.h / ledc_pool.h，驱动实现细节头位于 include/drivers/。
+# 头文件：periph.h / ledc_pool.h,驱动实现细节头位于 include/drivers/。
 idf_component_register(
     SRCS
         "periph.c"

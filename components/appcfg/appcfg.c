@@ -178,8 +178,8 @@ static bool appcfg_persist(uint32_t version, const char *payload)
     return true;
 }
 
-/* reportInterval → g_reportIntervalMs，actuators → periph；
- * 返回 false 表示有执行器失败，不能回执 */
+/* reportInterval → g_reportIntervalMs,actuators → periph；
+ * 返回 false 表示有执行器失败,不能回执 */
 static bool apply_runtime_effects(const cJSON *config)
 {
     if (config == NULL || !cJSON_IsObject(config))
@@ -220,7 +220,7 @@ static bool replay_payload(void)
     cJSON *cfg = cJSON_Parse(s_payload);
     if (cfg == NULL)
     {
-        ESP_LOGE(TAG, "[appcfg] 持久化 payload 解析失败，跳过重放");
+        ESP_LOGE(TAG, "[appcfg] 持久化 payload 解析失败,跳过重放");
         return false;
     }
     bool ok = apply_runtime_effects(cfg);
@@ -238,8 +238,8 @@ void appcfg_replay(void)
                   (unsigned)s_appliedVersion);
     if (!replay_payload())
     {
-        /* 开机重放失败必须补回执重试，否则本次开机永远不会再应用 */
-        ESP_LOGW(TAG, "[appcfg] 开机重放执行器失败，标记待回执等待重试");
+        /* 开机重放失败必须补回执重试,否则本次开机永远不会再应用 */
+        ESP_LOGW(TAG, "[appcfg] 开机重放执行器失败,标记待回执等待重试");
         if (!s_reportPending)
         {
             s_reportPending = true;
@@ -307,13 +307,13 @@ void appcfg_flush_pending_report(void)
         appcfg_unlock();
         return;
     }
-    /* 先重放再回执，避免把未生效的配置报成已应用 */
+    /* 先重放再回执,避免把未生效的配置报成已应用 */
     bool replayed = replay_payload();
     appcfg_unlock();
 
     if (!replayed)
     {
-        ESP_LOGW(TAG, "[appcfg] 待回执重放仍失败，继续等待下次重试");
+        ESP_LOGW(TAG, "[appcfg] 待回执重放仍失败,继续等待下次重试");
         return;
     }
     send_report();
@@ -337,7 +337,7 @@ static bool handle_config_locked(uint32_t version, const cJSON *config)
         return false;
     }
 
-    /* 新版本，或同版本但本地 payload 丢失：重新持久化 */
+    /* 新版本,或同版本但本地 payload 丢失：重新持久化 */
     if (version > s_appliedVersion || s_payload == NULL)
     {
         char *cfgStr = cJSON_PrintUnformatted(config);
@@ -350,10 +350,10 @@ static bool handle_config_locked(uint32_t version, const cJSON *config)
         ESP_LOGI(TAG, "[appcfg] Applied config version=%u", (unsigned)version);
     }
 
-    /* 运行时未生效则保持 rpending，等周期任务重试 */
+    /* 运行时未生效则保持 rpending,等周期任务重试 */
     if (!replay_payload())
     {
-        ESP_LOGE(TAG, "[appcfg] 配置已保存但运行时生效失败，保持待回执并重试 (version=%u)",
+        ESP_LOGE(TAG, "[appcfg] 配置已保存但运行时生效失败,保持待回执并重试 (version=%u)",
                       (unsigned)version);
         return false;
     }

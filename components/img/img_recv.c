@@ -27,7 +27,7 @@ static char   s_cur_path[IMG_PATH_MAX];
 static size_t s_total;
 static size_t s_received;
 static bool   s_is_panel;
-static int    s_slot = -1;                 // 本次占用的槽位：0=image1.bin，1=image2.bin
+static int    s_slot = -1;                 // 本次占用的槽位：0=image1.bin,1=image2.bin
 
 static TaskHandle_t     s_show_task;
 static SemaphoreHandle_t s_show_sem;
@@ -47,7 +47,7 @@ static void reply(const char *fmt, ...)
     vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
 
-    // 各回执 JSON 均以 '{' 开头，统一补 from:"esp" 便于上游日志识别来源。
+    // 各回执 JSON 均以 '{' 开头,统一补 from:"esp" 便于上游日志识别来源。
     char out[224];
     if (body[0] == '{') {
         snprintf(out, sizeof(out), "{\"from\":\"esp\",%s", body + 1);
@@ -57,7 +57,7 @@ static void reply(const char *fmt, ...)
     s_send(out);
 }
 
-// 文件名固定，原名只进日志
+// 文件名固定,原名只进日志
 static void image_path(int slot, char *out, size_t outsz)
 {
     snprintf(out, outsz, FATFS_MOUNT_POINT "/image%d.bin", slot + 1);
@@ -77,7 +77,7 @@ static void transfer_reset(void)
     s_slot = -1;
 }
 
-// 整屏刷新约 15s，与接收路径解耦
+// 整屏刷新约 15s,与接收路径解耦
 
 static int file_reader(void *ctx, uint8_t *buf, size_t len)
 {
@@ -134,7 +134,7 @@ static void finish_ok(void)
     reply("{\"type\":\"img_done\",\"name\":\"%s\",\"bytes\":%u}", s_name, (unsigned)s_received);
 
     if (s_is_panel && s_slot >= 0) {
-        // 收满才排队刷屏，槽位占用到刷完
+        // 收满才排队刷屏,槽位占用到刷完
         strncpy(s_show_path, s_cur_path, sizeof(s_show_path) - 1);
         s_show_path[sizeof(s_show_path) - 1] = '\0';
         strncpy(s_show_name, s_name, sizeof(s_show_name) - 1);
@@ -180,7 +180,7 @@ static void on_text(const uint8_t *data, int len)
 
         bool is_panel = cJSON_IsString(kind) && strcmp(kind->valuestring, "epd2bpp") == 0;
 
-        // 未配 epd 执行器时 display 未初始化，先初始化才能取帧大小
+        // 未配 epd 执行器时 display 未初始化,先初始化才能取帧大小
         if (is_panel && display_init() != ESP_OK) {
             ESP_LOGE(TAG, "panel init failed");
             reply("{\"type\":\"img_error\",\"reason\":\"panel init failed\"}");
@@ -230,7 +230,7 @@ static void on_text(const uint8_t *data, int len)
 
     } else if (strcmp(type->valuestring, "img_end") == 0) {
         if (s_fp == NULL) {
-            // 数据分片已自动收满并回执，忽略重复的 end。
+            // 数据分片已自动收满并回执,忽略重复的 end。
         } else if (s_received == s_total) {
             finish_ok();
         } else {
@@ -270,7 +270,7 @@ esp_err_t img_recv_start(img_send_text_t send_text)
 {
     s_send = send_text;
 
-    // 只挂一次，失败可重试
+    // 只挂一次,失败可重试
     if (!s_storage_mounted) {
         esp_err_t err = fatfs_store_mount();
         if (err != ESP_OK) {
@@ -303,7 +303,7 @@ bool img_recv_handle(img_frame_type_t type, const uint8_t *data, int len)
     }
 
     if (type == IMG_FRAME_TEXT) {
-        // '{' 开头才算控制帧，位图分片走二进制主题
+        // '{' 开头才算控制帧,位图分片走二进制主题
         if (data[0] != '{') {
             return false;
         }

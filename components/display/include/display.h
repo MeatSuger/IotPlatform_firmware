@@ -10,8 +10,8 @@
 extern "C" {
 #endif
 
-/* 显示层(面板无关)。逻辑位图(前端按此打包)：2bpp BWRY，4 像素/字节，
- * MSB first，行优先；0=黑 1=白 2=黄 3=红。 */
+/* 显示层(面板无关)。逻辑位图(前端按此打包)：2bpp BWRY,4 像素/字节,
+ * MSB first,行优先；0=黑 1=白 2=黄 3=红。 */
 
 /* 板载固定接线(SPI2 IOMUX 原生脚) */
 #define DISPLAY_PIN_MOSI 11
@@ -35,10 +35,10 @@ enum {
 typedef struct {
   uint16_t width;
   uint16_t height;
-  const char *ctrl; /* 控制器名，仅用于日志 */
+  const char *ctrl; /* 控制器名,仅用于日志 */
 } display_info_t;
 
-/* 数据源：读入最多 len 字节，返回实际字节数；<=0 视为失败 */
+/* 数据源：读入最多 len 字节,返回实际字节数；<=0 视为失败 */
 typedef int (*display_read_t)(void *ctx, uint8_t *buf, size_t len);
 
 /* 当前面板信息与整帧字节数(width*height/4) */
@@ -54,13 +54,13 @@ const char *display_color_depth(void);
 /* 初始化显示(总线 + 引脚 + 控制器)；重复调用安全 */
 esp_err_t display_init(void);
 
-/* 流式写入整屏位图并刷新(阻塞)；成功后自动进深睡，下次调用会重新初始化 */
+/* 流式写入整屏位图并刷新(阻塞)；成功后自动进深睡,下次调用会重新初始化 */
 esp_err_t display_show(display_read_t read_cb, void *ctx);
 
 /* 自检：按面板支持的颜色画等宽竖彩条 */
 void display_self_test(void);
 
-/* 总线原语(供适配层调用，适配层不直接碰 SPI/GPIO) */
+/* 总线原语(供适配层调用,适配层不直接碰 SPI/GPIO) */
 void display_bus_cmd(uint8_t cmd);
 void display_bus_data(uint8_t data);
 void display_bus_write(const void *buf, size_t len);

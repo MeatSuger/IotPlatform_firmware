@@ -36,7 +36,7 @@ typedef struct {
 extern EventGroupHandle_t g_wifiEventGroup;
 extern volatile bool g_authSuccess;
 
-/* 运行时上报周期，默认 SEND_INTERVAL */
+/* 运行时上报周期,默认 SEND_INTERVAL */
 extern uint32_t g_reportIntervalMs;
 
 #endif /* _COMMON_H_ */

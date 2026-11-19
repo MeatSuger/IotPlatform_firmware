@@ -30,7 +30,7 @@ static bool internal_temp_init(void)
         ESP_LOGE(TAG, "temperature_sensor_install failed: 0x%x", err);
         return false;
     }
-    /* 采样时才上电，间隔内保持 disable 省电 */
+    /* 采样时才上电,间隔内保持 disable 省电 */
     ESP_LOGI(TAG, "Temperature sensor ready");
     return true;
 }
@@ -126,7 +126,7 @@ static sensor_collect_fn collector_find(const char *type)
     return NULL;
 }
 
-/* 平台按 dataType 校验，不符的数据点会被整条丢弃，这里先跳过；
+/* 平台按 dataType 校验,不符的数据点会被整条丢弃,这里先跳过；
  * 未声明或未知类型放行 */
 static bool value_matches_datatype(const cJSON *def, const cJSON *value)
 {
@@ -186,7 +186,7 @@ char *sensor_build_report(const char *config_json)
         sensor_collect_fn fn = collector_find(type->valuestring);
         if (fn == NULL)
         {
-            ESP_LOGW(TAG, "sensor: 无 type='%s' 的采集器，跳过 (id=%s)",
+            ESP_LOGW(TAG, "sensor: 无 type='%s' 的采集器,跳过 (id=%s)",
                      type->valuestring, id->valuestring);
             continue;
         }
@@ -197,7 +197,7 @@ char *sensor_build_report(const char *config_json)
 
         if (!value_matches_datatype(def, value))
         {
-            ESP_LOGW(TAG, "sensor: 上报值类型与定义 dataType 不符，跳过 (id=%s, dataType=%s)",
+            ESP_LOGW(TAG, "sensor: 上报值类型与定义 dataType 不符,跳过 (id=%s, dataType=%s)",
                      id->valuestring, cJSON_GetObjectItem(def, "dataType")->valuestring);
             cJSON_Delete(value);
             continue;

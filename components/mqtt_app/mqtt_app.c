@@ -17,7 +17,7 @@ ESP_EVENT_DECLARE_BASE(MQTT_EVENTS);
 
 static const char *TAG = "mqtt";
 
-/* 串行化 publish 与 destroy，避免恢复任务销毁客户端时发布方 use-after-free */
+/* 串行化 publish 与 destroy,避免恢复任务销毁客户端时发布方 use-after-free */
 static SemaphoreHandle_t s_lock;
 static mqtt_published_cb_t s_published_cb;
 
@@ -31,7 +31,7 @@ static bool topic_matches(size_t topic_len, const char *topic,
 static char s_img_rx[MQTT_BUFFER_SIZE];
 static int s_img_rx_len;
 
-/* cmd/config 可能被分片，整条收齐再入队 */
+/* cmd/config 可能被分片,整条收齐再入队 */
 #define MQTT_CMD_RX_MAX (MQTT_BUFFER_SIZE * 2)
 static char s_cmd_rx[MQTT_CMD_RX_MAX];
 static int s_cmd_rx_len;
@@ -65,7 +65,7 @@ static void img_mqtt_handle(esp_mqtt_event_handle_t event) {
   s_img_rx_len = 0;
 }
 
-/* esp-mqtt 内部重连无事件，卡死只能由主循环监督 */
+/* esp-mqtt 内部重连无事件,卡死只能由主循环监督 */
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                                int32_t event_id, void *event_data) {
   esp_mqtt_client_handle_t client = handler_args;
@@ -82,7 +82,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
       xEventGroupClearBits(g_wifiEventGroup,
                            MQTT_AUTH_REFUSED_BIT); /* broker 接受了凭证 */
 
-    /* cmd: QoS1，非 retained */
+    /* cmd: QoS1,非 retained */
     esp_mqtt_client_subscribe(client, MQTT_TOPIC_CMD, 1);
     ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CMD);
 
@@ -90,7 +90,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     esp_mqtt_client_subscribe(client, MQTT_TOPIC_CONFIG, 1);
     ESP_LOGI(TAG, "Subscribed to: %s", MQTT_TOPIC_CONFIG);
 
-    /* img: QoS0，不重传 */
+    /* img: QoS0,不重传 */
     esp_mqtt_client_subscribe(client, MQTT_TOPIC_IMG_CTL, 0);
     esp_mqtt_client_subscribe(client, MQTT_TOPIC_IMG_DATA, 0);
     ESP_LOGI(TAG, "Subscribed to: %s, %s", MQTT_TOPIC_IMG_CTL,
@@ -100,21 +100,21 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGW(TAG, "MQTT disconnected");
     g_isMQTTConnected = false;
-    /* 不清队列，保留 HTTP 拉取的命令 */
+    /* 不清队列,保留 HTTP 拉取的命令 */
     break;
 
   case MQTT_EVENT_DATA: {
     ESP_LOGD(TAG, "MQTT message received, topic: %.*s, data: %.*s",
              event->topic_len, event->topic, event->data_len, event->data);
 
-    /* 图片走 img 组件，不进命令队列 */
+    /* 图片走 img 组件,不进命令队列 */
     if (topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_CTL) ||
         topic_matches(event->topic_len, event->topic, MQTT_TOPIC_IMG_DATA)) {
       img_mqtt_handle(event);
       break;
     }
 
-    /* topic 不保证 NUL 结尾，比较用 topic_len */
+    /* topic 不保证 NUL 结尾,比较用 topic_len */
     if (!topic_matches(event->topic_len, event->topic, MQTT_TOPIC_CMD) &&
         !topic_matches(event->topic_len, event->topic, MQTT_TOPIC_CONFIG))
       break;
@@ -167,7 +167,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
   case MQTT_EVENT_ERROR:
     ESP_LOGE(TAG, "MQTT error");
     g_isMQTTConnected = false;
-    /* CONNACK 拒绝 = Token 失效，通知 app_main 全量重认证 */
+    /* CONNACK 拒绝 = Token 失效,通知 app_main 全量重认证 */
     if (event->error_handle != NULL &&
         event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
       ESP_LOGW(TAG,
@@ -192,7 +192,7 @@ esp_mqtt_client_handle_t mqtt_app_create(void) {
   if (s_lock == NULL)
     s_lock = xSemaphoreCreateMutex();
 
-  /* keepalive 300s、重连 60s，减少 TLS 全握手 */
+  /* keepalive 300s、重连 60s,减少 TLS 全握手 */
   esp_mqtt_client_config_t mqtt_cfg = {
       .broker =
           {
@@ -227,7 +227,7 @@ esp_mqtt_client_handle_t mqtt_app_create(void) {
           },
   };
 
-  /* esp-mqtt 内部 strdup，init 后即可释放 */
+  /* esp-mqtt 内部 strdup,init 后即可释放 */
   char *token = token_load();
   if (token != NULL && strlen(token) > 0) {
     mqtt_cfg.credentials.authentication.password = token;
@@ -258,7 +258,7 @@ void mqtt_app_destroy(esp_mqtt_client_handle_t client) {
   if (client == NULL)
     return;
 
-  /* 先摘全局句柄再阻塞 stop，发布方拿到旧句柄前会先等锁 */
+  /* 先摘全局句柄再阻塞 stop,发布方拿到旧句柄前会先等锁 */
   if (s_lock != NULL)
     xSemaphoreTake(s_lock, portMAX_DELAY);
   if (g_mqttClient == client)

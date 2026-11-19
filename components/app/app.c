@@ -24,7 +24,7 @@ void sensorReportTask(void *pvParameters)
     for (;;)
     {
         EventBits_t bits = xEventGroupGetBits(g_wifiEventGroup);
-        /* MQTT 未连接时跳过，避免启动时序刷错误日志 */
+        /* MQTT 未连接时跳过,避免启动时序刷错误日志 */
         if ((bits & WIFI_CONNECTED_BIT) && g_isMQTTConnected)
         {
             /* 周期补发待回执 */
@@ -43,7 +43,7 @@ void sensorReportTask(void *pvParameters)
             }
             else if (lastReportOk)
             {
-                ESP_LOGI(TAG, "[Core 0] 无可用传感器定义/采集失败，等待云端配置 sensors 后开始上报");
+                ESP_LOGI(TAG, "[Core 0] 无可用传感器定义/采集失败,等待云端配置 sensors 后开始上报");
                 lastReportOk = false;
             }
         }
@@ -51,7 +51,7 @@ void sensorReportTask(void *pvParameters)
     }
 }
 
-/* Core 1 出队分发：配置走 appcfg，控制命令走 periph */
+/* Core 1 出队分发：配置走 appcfg,控制命令走 periph */
 
 void cmdProcessTask(void *pvParameters)
 {
@@ -71,7 +71,7 @@ void cmdProcessTask(void *pvParameters)
 
         if (root == NULL)
         {
-            ESP_LOGE(TAG, "[cmd] 消息 JSON 解析失败，丢弃");
+            ESP_LOGE(TAG, "[cmd] 消息 JSON 解析失败,丢弃");
             continue;
         }
 
@@ -100,7 +100,7 @@ void cmdProcessTask(void *pvParameters)
         }
         else
         {
-            ESP_LOGW(TAG, "[cmd] 未知消息信封，忽略");
+            ESP_LOGW(TAG, "[cmd] 未知消息信封,忽略");
         }
 
         cJSON_Delete(root);

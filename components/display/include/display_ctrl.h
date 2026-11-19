@@ -10,14 +10,14 @@
 extern "C" {
 #endif
 
-/* 控制器适配层接口：display.c 负责调度，适配层只做命令序列与数据组织。 */
+/* 控制器适配层接口：display.c 负责调度,适配层只做命令序列与数据组织。 */
 
 typedef struct display_ctrl {
   const char *name;
   uint16_t width;
   uint16_t height;
   uint8_t color_mask;           /* 支持的颜色位图：决定自检画几条彩条 */
-  bool busy_high_means_busy;    /* BUSY 极性：true=高电平为忙(SSD1683)，false=低(JD79665) */
+  bool busy_high_means_busy;    /* BUSY 极性：true=高电平为忙(SSD1683),false=低(JD79665) */
   esp_err_t (*init)(void);                                     /* 复位 + 寄存器 */
   void (*store_row)(uint16_t y, const uint8_t *logical_row);    /* 逻辑行 → 原生缓冲 */
   esp_err_t (*flush)(void);                                    /* 送屏并刷新 */

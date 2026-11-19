@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 /* 图片接收：JSON 控制帧 → 分片落 FatFS 双槽 → 独立任务刷屏。
- * kind="epd2bpp" 刷 2bpp 面板位图，其余文件只落盘。
+ * kind="epd2bpp" 刷 2bpp 面板位图,其余文件只落盘。
  * 主题：img/ctl、img/data、img/reply。 */
 
 typedef enum {
@@ -19,10 +19,10 @@ typedef enum {
     IMG_FRAME_BINARY = 1,
 } img_frame_type_t;
 
-#define IMG_MAX_SIZE (12 * 1024 * 1024) /* 单文件上限，< storage 分区 */
+#define IMG_MAX_SIZE (12 * 1024 * 1024) /* 单文件上限,< storage 分区 */
 #define IMG_NAME_MAX 64
 #define IMG_PATH_MAX 128
-#define IMG_PANEL_SLOTS 2 /* 双槽轮换，刷屏时不覆盖 */
+#define IMG_PANEL_SLOTS 2 /* 双槽轮换,刷屏时不覆盖 */
 
 typedef int (*img_send_text_t)(const char *text);
 

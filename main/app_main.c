@@ -23,7 +23,7 @@ QueueHandle_t g_commandQueue = NULL;
 EventGroupHandle_t g_wifiEventGroup = NULL;
 uint32_t g_reportIntervalMs = SEND_INTERVAL;
 
-/* 上电时 GPIO 被拉低则擦 NVS 重启，先于 nvs_flash_init 执行 */
+/* 上电时 GPIO 被拉低则擦 NVS 重启,先于 nvs_flash_init 执行 */
 static void factory_reset_check(void) {
   gpio_config_t cfg = {
       .pin_bit_mask = 1ULL << FACTORY_RESET_GPIO,
@@ -34,7 +34,7 @@ static void factory_reset_check(void) {
   };
   ESP_ERROR_CHECK(gpio_config(&cfg));
 
-  vTaskDelay(pdMS_TO_TICKS(10)); /* 等上拉建立，滤掉上电抖动 */
+  vTaskDelay(pdMS_TO_TICKS(10)); /* 等上拉建立,滤掉上电抖动 */
 
   if (gpio_get_level(FACTORY_RESET_GPIO) != 0)
     return;
@@ -47,7 +47,7 @@ static void factory_reset_check(void) {
   esp_restart();
 }
 
-/* TLS 握手耗 CPU，放独立任务避免饿死 IDLE 触发 WDT */
+/* TLS 握手耗 CPU,放独立任务避免饿死 IDLE 触发 WDT */
 static void networkInitTask(void *pv) {
   (void)pv;
   ESP_LOGI(TAG, "[Core %d] Network init task started", (int)xPortGetCoreID());
@@ -62,8 +62,8 @@ static void networkInitTask(void *pv) {
   vTaskDelete(NULL);
 }
 
-/* 重启要重新关联 WiFi 和 TLS 握手，指数退避 5s→2min。
- * esp_restart 会重载 .rtc.data，必须用 RTC_NOINIT + magic 才能跨重启保留。 */
+/* 重启要重新关联 WiFi 和 TLS 握手,指数退避 5s→2min。
+ * esp_restart 会重载 .rtc.data,必须用 RTC_NOINIT + magic 才能跨重启保留。 */
 #define RESTART_BACKOFF_MAGIC 0x5A17B00FU
 #define RESTART_BACKOFF_MIN_MS 5000U
 #define RESTART_BACKOFF_MAX_MS 120000U
@@ -90,8 +90,8 @@ static void backoff_restart(const char *why) {
   esp_restart();
 }
 
-/* 恢复在独立任务里跑：mqtt_app_destroy 最长阻塞 30s，TLS 握手也耗 CPU。
- * full_reauth=false 复用 token，true 用引导密钥重新认证。
+/* 恢复在独立任务里跑：mqtt_app_destroy 最长阻塞 30s,TLS 握手也耗 CPU。
+ * full_reauth=false 复用 token,true 用引导密钥重新认证。
  * 顺序：毁旧客户端 → sync → 重建。 */
 static void connectionRecoveryTask(void *pv) {
   const bool full_reauth = (pv != NULL);
@@ -132,7 +132,7 @@ static void run_recovery(bool full_reauth) {
   if (!(rb & RECOVERY_DONE_BIT))
     backoff_restart("Connection recovery stuck");
 
-  s_restartBackoffMs = RESTART_BACKOFF_MIN_MS; /* 恢复成功，退避归零 */
+  s_restartBackoffMs = RESTART_BACKOFF_MIN_MS; /* 恢复成功,退避归零 */
   s_restartBackoffMagic = RESTART_BACKOFF_MAGIC;
 }
 
@@ -162,7 +162,7 @@ void app_main(void) {
   /* 配置状态在 MQTT 事件前就绪 */
   appcfg_init();
 
-  /* 屏蔽 PHY 日志，避免 IDF 6.0 printf 锁崩溃 */
+  /* 屏蔽 PHY 日志,避免 IDF 6.0 printf 锁崩溃 */
   esp_log_level_set("phy", ESP_LOG_NONE);
   esp_log_level_set("wifi", ESP_LOG_WARN);
 
@@ -173,12 +173,12 @@ void app_main(void) {
   /* 独立 OTA：固定 URL 检查一次，有新固件则写入并重启 */
   ota_check_on_boot();
 
-  /* 必须在 networkInitTask 前创建，syncPendingCommands 会往里入队 */
+  /* 必须在 networkInitTask 前创建,syncPendingCommands 会往里入队 */
   g_commandQueue = xQueueCreate(20, sizeof(CommandMsg));
   if (g_commandQueue == NULL)
     backoff_restart("Failed to create command queue");
 
-  /* spawn 前清位，等待时 clear-on-exit */
+  /* spawn 前清位,等待时 clear-on-exit */
   xEventGroupClearBits(g_wifiEventGroup, NETWORK_INIT_DONE_BIT);
   if (xTaskCreatePinnedToCore(networkInitTask, "NetInit", 8192, NULL, 2, NULL,
                               0) != pdPASS)
@@ -198,7 +198,7 @@ void app_main(void) {
 
   /* --- Peripheral bus: register drivers --- */
   periph_bus_init();
-  /* 占位，防止云端把复位脚当普通 IO 分配 */
+  /* 占位,防止云端把复位脚当普通 IO 分配 */
   if (!periph_pin_claim(FACTORY_RESET_GPIO, "factory_reset"))
     ESP_LOGW(TAG, "GPIO%d already claimed, factory reset pin not reserved",
              FACTORY_RESET_GPIO);
@@ -223,7 +223,7 @@ void app_main(void) {
   ESP_LOGI(TAG, "System init complete");
 
   /* 主循环监督 WiFi/MQTT：WiFi 掉线、CONNACK 拒绝、或 WiFi 在线但 MQTT
-   * 断连超时，都进恢复流程；进入前清掉开机残留事件位。 */
+   * 断连超时,都进恢复流程；进入前清掉开机残留事件位。 */
   xEventGroupClearBits(g_wifiEventGroup, WIFI_DISCONNECTED_BIT |
                                              MQTT_AUTH_REFUSED_BIT |
                                              RECOVERY_DONE_BIT);
@@ -231,13 +231,13 @@ void app_main(void) {
   TickType_t mqttDownSince =
       0; /* 0 = 未计时 */
   uint32_t mqttStuckWaitMs =
-      MQTT_STUCK_DEADLINE_MS; /* 断连容忍时长，连续失败翻倍 */
+      MQTT_STUCK_DEADLINE_MS; /* 断连容忍时长,连续失败翻倍 */
   for (;;) {
     EventBits_t bits = xEventGroupWaitBits(
         g_wifiEventGroup, WIFI_DISCONNECTED_BIT | MQTT_AUTH_REFUSED_BIT, pdTRUE,
         pdFALSE, pdMS_TO_TICKS(MQTT_SUPERVISE_PERIOD_MS));
 
-    /* 同时置位时按全量重认证处理，省一次 TLS */
+    /* 同时置位时按全量重认证处理,省一次 TLS */
     bool full_reauth = (bits & MQTT_AUTH_REFUSED_BIT) != 0;
     bool wifi_was_down = (bits & WIFI_DISCONNECTED_BIT) != 0;
     bool supervise_force = false;
@@ -277,20 +277,20 @@ void app_main(void) {
                    (unsigned)(mqttStuckWaitMs / 1000));
           mqttDownSince = 0;
           supervise_force = true;
-          /* 仍失败则翻倍，连上后归位 */
+          /* 仍失败则翻倍,连上后归位 */
           mqttStuckWaitMs *= 2U;
           if (mqttStuckWaitMs > MQTT_SUPERVISE_MAX_MS)
             mqttStuckWaitMs = MQTT_SUPERVISE_MAX_MS;
         }
       } else {
-        mqttDownSince = 0; /* 已连接或 WiFi 不在线，清零 */
-        mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* 连接恢复，归位 */
+        mqttDownSince = 0; /* 已连接或 WiFi 不在线,清零 */
+        mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* 连接恢复,归位 */
       }
     }
 
-    /* 只在恢复成功后归零，否则失败重启永远只等 5s */
+    /* 只在恢复成功后归零,否则失败重启永远只等 5s */
     if (wifi_was_down || full_reauth || supervise_force) {
-      mqttDownSince = 0; /* 重建连接，重新计时 */
+      mqttDownSince = 0; /* 重建连接,重新计时 */
       run_recovery(full_reauth);
     }
   }

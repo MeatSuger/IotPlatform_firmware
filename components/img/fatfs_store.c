@@ -1,4 +1,4 @@
-// 图片存储分区挂载：label="storage" 的 FAT 分区 → /fatfs，带 wear_levelling。
+// 图片存储分区挂载：label="storage" 的 FAT 分区 → /fatfs,带 wear_levelling。
 
 #include "fatfs_store.h"
 

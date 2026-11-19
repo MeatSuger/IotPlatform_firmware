@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-/* 声明式外设总线：按云端配置 probe 设备，命令只接收传输原语，语义换算在云端。
+/* 声明式外设总线：按云端配置 probe 设备,命令只接收传输原语,语义换算在云端。
  * 设备类型取自 specs.transport；新增 transport 只需注册驱动。 */
 
 typedef struct cJSON cJSON;
@@ -17,7 +17,7 @@ typedef struct periph_device periph_device_t;
 
 /* 驱动操作 */
 typedef struct {
-    /* 处理控制命令，pl 为完整 payload */
+    /* 处理控制命令,pl 为完整 payload */
     bool (*command)(periph_device_t *dev, const cJSON *pl);
 } periph_ops_t;
 
@@ -25,7 +25,7 @@ typedef struct {
 typedef struct periph_driver {
     const char *name;      /* 取自 specs.transport */
     const periph_ops_t *ops;   /* 可为 NULL */
-    /* 初始化硬件，私有状态写入 drvdata */
+    /* 初始化硬件,私有状态写入 drvdata */
     bool (*probe)(periph_device_t *dev, const cJSON *cfg);
     /* 释放 probe 占用的资源 */
     void (*remove)(periph_device_t *dev);
@@ -49,7 +49,7 @@ void periph_bus_init(void);
 /* 注册 transport 驱动；重名返回 -1 */
 int periph_driver_register(periph_driver_t *drv);
 
-/* 按名查找设备，无则 NULL */
+/* 按名查找设备,无则 NULL */
 periph_device_t *periph_device_find(const char *name);
 
 /* 创建或重配置设备；transport 取自 cfg->"transport"(driver 字段忽略) */
@@ -59,7 +59,7 @@ bool periph_device_add(const char *name, const char *transport,
 /* 移除设备并摘链 */
 bool periph_device_remove(const char *name);
 
-/* 按 actuators 定义 diff 应用：禁用或缺 transport 的移除，其余新增/重配，
+/* 按 actuators 定义 diff 应用：禁用或缺 transport 的移除,其余新增/重配,
  * 最后移除不在期望列表中的设备 */
 bool periph_apply_config(const cJSON *actuators);
 
