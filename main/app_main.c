@@ -7,6 +7,7 @@
 #include "mqtt_app.h"
 #include "network.h"
 #include "nvs_flash.h"
+#include "ota.h"
 #include "periph.h"
 #include "sensor.h"
 #include "token.h"
@@ -168,6 +169,9 @@ void app_main(void) {
   /* --- WiFi --- */
   if (!wifi_init_sta())
     backoff_restart("WiFi connection failed");
+
+  /* 独立 OTA：固定 URL 检查一次，有新固件则写入并重启 */
+  ota_check_on_boot();
 
   /* 必须在 networkInitTask 前创建，syncPendingCommands 会往里入队 */
   g_commandQueue = xQueueCreate(20, sizeof(CommandMsg));

@@ -16,6 +16,10 @@
 /* 上报面板芯片与分辨率 */
 #define DEVICE_UPDATE_URL "https://" API_HOST "/api/devices/" DEVICE_ID "/update"
 
+/* 独立 OTA：固件镜像固定地址(仅 https，空串关闭)。
+ * 开机联网后检查镜像头版本，与运行版本不同则升级并重启。 */
+#define OTA_FW_URL        "https://dl.meatsuger.top/iotEMI/esp32c3/firmware.bin"
+
 /* MQTT broker (WSS) */
 #define MQTT_BROKER_PATH      "/api/ws/mqtt/broker"
 

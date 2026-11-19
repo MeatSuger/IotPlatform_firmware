@@ -13,6 +13,7 @@ idf_component_register(
         esp_pm
         mqtt_app
         net
+        ota
         periph
         wifi
 )

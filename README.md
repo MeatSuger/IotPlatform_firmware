@@ -34,7 +34,9 @@ ESP32-S3 设备固件，基于 ESP-IDF 构建，支持 WiFi 联网、MQTT 双向
 - MQTT 连接 IoT 平台(设备注册 / 数据上报 / 下行命令接收)
 - 传感器数据采集(温度等)
 - LED 状态指示
-- OTA / Token 管理
+- **OTA 升级**：固件内置固定 HTTPS 地址(`config.h` 的 `OTA_FW_URL`),开机联网后
+  检查镜像头版本,有新版本才下载并重启;不经 MQTT,也不读云端 `config.ota`
+- Token 管理
 
 ## 模块结构(ESP-IDF 组件化布局，见 https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/api-guides/build-system.html )
 
@@ -57,6 +59,7 @@ firmware/
 │   │                           #   ctrl/ 下按面板拆分：ssd1683.c(4.2" BWR)、
 │   │                           #   jd79665.c(3.98" BWRY)；开机按 BUSY 极性自动识别
 │   ├── img/                    # 图片接收：控制帧 + 二进制分片 → FatFS(/fatfs) → 刷屏
+│   ├── ota/                    # 独立 HTTPS 升级(固定 URL,开机检查镜像版本→写入→重启)
 │   └── app/                    # 应用运行时(周期上报/命令分发任务 + 传感器按 type 采集器上报)
 ├── managed_components/         # 第三方组件(component manager 自动拉取，勿手改)
 ├── dependencies.lock           # 组件版本锁定
@@ -103,7 +106,8 @@ idf.py -p /dev/ttyUSB0 monitor
 编译前确认：
 
 - `components/core/include/config.h`：`DEVICE_ID`(注册响应中的 `deviceId`)、
-  `API_HOST` / `DEVICE_UPDATE_URL` / `MQTT_BROKER_PATH`(平台域名与接入路径)
+  `API_HOST` / `DEVICE_UPDATE_URL` / `MQTT_BROKER_PATH`(平台域名与接入路径)、
+  `OTA_FW_URL`(固件镜像固定地址,空串关闭 OTA)
 - `components/core/include/secrets.h`：`DEVICE_SECRET`(注册响应中的 `deviceSecret`，
   仅返回一次；换设备/重置后需同步更新)。该文件已在 `.gitignore` 中，不要提交。
   若密钥曾进入版本库，需在平台侧轮换(`POST /api/devices/{deviceId}/secret`)

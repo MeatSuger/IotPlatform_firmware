@@ -155,6 +155,7 @@ X-Device-Secret: <deviceSecret>
 |---|---|---|
 | `config` | `{"version":N,"config":{...}}` | 与 retained 快照同解析(appcfg 状态机) |
 | `control` | `{"action":<执行器id>,"value":{...}}` | 路由到对应 transport 执行 |
+| `ota` | — | 固件不处理(升级走设备内置 HTTPS 地址,独立于 MQTT/云端配置) |
 
 控制示例：
 
