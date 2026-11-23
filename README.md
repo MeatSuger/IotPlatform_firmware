@@ -107,7 +107,7 @@ idf.py -p /dev/ttyUSB0 monitor
 
 - `components/core/include/config.h`：`DEVICE_ID`(注册响应中的 `deviceId`)、
   `API_HOST` / `DEVICE_UPDATE_URL` / `MQTT_BROKER_PATH`(平台域名与接入路径)、
-  `OTA_FW_URL`(固件镜像固定地址,空串关闭 OTA)
+  `OTA_ENABLE`(0 关闭 OTA)、`OTA_FW_URL`(固件镜像固定地址)
 - `components/core/include/secrets.h`：`DEVICE_SECRET`(注册响应中的 `deviceSecret`,
   仅返回一次；换设备/重置后需同步更新)。该文件已在 `.gitignore` 中,不要提交。
   若密钥曾进入版本库,需在平台侧轮换(`POST /api/devices/{deviceId}/secret`)

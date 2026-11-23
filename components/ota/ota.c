@@ -14,6 +14,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#if !OTA_ENABLE
+/* 编译期关闭：空实现，esp_https_ota 符号不再被引用，链接时自动丢弃 */
+void ota_check_on_boot(void) {}
+#else
+
 static const char *TAG = "ota";
 
 /* 用于捕获系统事件的事件处理程序 */
@@ -59,7 +64,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
   }
 }
 
-#define OTA_TASK_STACK 10240
+#define OTA_TASK_STACK 6144
 #define OTA_TASK_PRIO 5
 
 /* app_main 任务栈只有 3.5KB,放不下 TLS；升级逻辑在独立任务里跑 */
@@ -70,8 +75,9 @@ static bool ota_download(void) {
   esp_http_client_config_t http = {
       .url = OTA_FW_URL,
       .crt_bundle_attach = esp_crt_bundle_attach,
-      .timeout_ms = 20000,
+      .timeout_ms = 5000,
       .keep_alive_enable = true,
+      .buffer_size = 2048,
   };
   const esp_https_ota_config_t cfg = {.http_config = &http};
   esp_https_ota_handle_t handle = NULL;
@@ -106,8 +112,10 @@ static bool ota_download(void) {
 
   ESP_LOGI(TAG, "发现新固件 %s -> %s,开始下载", running->version,
            incoming.version);
-  while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS)
-    ;
+  while ((err = esp_https_ota_perform(handle)) ==
+         ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+    taskYIELD(); /* esp_https_ota_perform 内部会阻塞等待网络 */
+  }
 
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "下载失败: %s", esp_err_to_name(err));
@@ -120,7 +128,6 @@ static bool ota_download(void) {
     return false;
   }
 
-  
   err = esp_https_ota_finish(handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "写入启动分区失败: %s", esp_err_to_name(err));
@@ -156,9 +163,8 @@ void ota_check_on_boot(void) {
   }
 
   s_caller = xTaskGetCurrentTaskHandle();
-  esp_err_t err = esp_event_handler_register(ESP_HTTPS_OTA_EVENT,
-                                             ESP_EVENT_ANY_ID, event_handler,
-                                             NULL);
+  esp_err_t err = esp_event_handler_register(
+      ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, event_handler, NULL);
   if (err != ESP_OK)
     ESP_LOGW(TAG, "注册 OTA 事件回调失败: %s", esp_err_to_name(err));
 
@@ -171,3 +177,5 @@ void ota_check_on_boot(void) {
   /* 升级成功会直接重启,不会通知；失败/跳过则继续启动 */
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
+
+#endif /* OTA_ENABLE */

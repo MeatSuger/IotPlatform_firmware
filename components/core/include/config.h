@@ -3,7 +3,7 @@
 
 /* 编译期常量 */
 
-#define DEVICE_ID         "90431b"
+#define DEVICE_ID         "50b46d"
 
 /* 注册设备时后端只返回一次的引导密钥,首次取 token 时放在 X-Device-Secret。
  * 真实值放在本地 secrets.h(已 gitignore),模板见 secrets.h.example。 */
@@ -16,9 +16,13 @@
 /* 上报面板芯片与分辨率 */
 #define DEVICE_UPDATE_URL "https://" API_HOST "/api/devices/" DEVICE_ID "/update"
 
-/* 独立 OTA：固件镜像固定地址(仅 https，空串关闭)。
+/* OTA 总开关：1 = 开机联网后检查固定地址固件并按需升级。
+ * 0 = OTA 代码整体不编译，esp_https_ota 也不参与链接。 */
+#define OTA_ENABLE        1
+
+/* 独立 OTA：固件镜像固定地址(仅 https，仅 OTA_ENABLE 时生效)。
  * 开机联网后检查镜像头版本，与运行版本不同则升级并重启。 */
-#define OTA_FW_URL        "https://dl.meatsuger.top/iotEMI/esp32c3/firmware.bin"
+#define OTA_FW_URL        "https://dl.meatsuger.top/iotEMI/esp32s3/firmware.bin"
 
 /* MQTT broker (WSS) */
 #define MQTT_BROKER_PATH      "/api/ws/mqtt/broker"
