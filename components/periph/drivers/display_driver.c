@@ -1,4 +1,5 @@
-// epd transport 胶水：引脚仲裁 + 命令转发,驱动在 display 组件。
+// epd transport 胶水：命令转发,驱动在 display 组件。
+// 面板引脚是板载固定接线,由 app_main 在开机时统一占位(见 main/app_main.c)。
 // config: {"transport":"epd"}；control: {"value":{"op":"selftest"}}。
 
 #include "drivers/display_driver.h"
@@ -11,27 +12,6 @@
 #include "esp_log.h"
 
 static const char *TAG = "display";
-
-static const int s_pins[] = {DISPLAY_PIN_MOSI, DISPLAY_PIN_SCK,
-                             DISPLAY_PIN_CS,   DISPLAY_PIN_DC,
-                             DISPLAY_PIN_RST,  DISPLAY_PIN_BUSY};
-static bool s_pins_claimed;
-
-static bool display_claim_pins(const char *owner) {
-  if (s_pins_claimed) {
-    return true;
-  }
-  for (size_t i = 0; i < sizeof(s_pins) / sizeof(s_pins[0]); i++) {
-    if (!periph_pin_claim(s_pins[i], owner)) {
-      for (size_t j = 0; j < i; j++) {
-        periph_pin_release(s_pins[j]);
-      }
-      return false;
-    }
-  }
-  s_pins_claimed = true;
-  return true;
-}
 
 /* 可选像素字段：未配置 present=false；配置了但非法返回 false */
 static bool display_opt_pixels(const cJSON *cfg, const char *key,
@@ -104,10 +84,6 @@ static bool display_check_cfg(const char *owner, const cJSON *cfg) {
 }
 
 static bool display_probe(periph_device_t *dev, const cJSON *cfg) {
-  if (!display_claim_pins(dev->name)) {
-    ESP_LOGE(TAG, "面板引脚被其它设备占用");
-    return false;
-  }
   if (display_init() != ESP_OK) {
     return false;
   }

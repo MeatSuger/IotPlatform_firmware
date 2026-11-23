@@ -47,7 +47,8 @@ void sensorReportTask(void *pvParameters)
                 lastReportOk = false;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(g_reportIntervalMs));
+        /* 等下一轮；周期被云端改小/改大时 appcfg 会通知,立刻按新周期走 */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(g_reportIntervalMs));
     }
 }
 

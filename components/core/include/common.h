@@ -39,4 +39,7 @@ extern volatile bool g_authSuccess;
 /* 运行时上报周期,默认 SEND_INTERVAL */
 extern uint32_t g_reportIntervalMs;
 
+/* 周期上报任务句柄：周期变更时用它唤醒,让新周期立即生效 */
+extern TaskHandle_t g_reportTask;
+
 #endif /* _COMMON_H_ */

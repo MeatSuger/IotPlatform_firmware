@@ -246,6 +246,13 @@ esp_mqtt_client_handle_t mqtt_app_create(void) {
 
   esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler,
                                  client);
+
+  /* 句柄由本组件维护：发布方都在 s_lock 下读取,不会看到半初始化的客户端 */
+  if (s_lock != NULL)
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+  g_mqttClient = client;
+  if (s_lock != NULL)
+    xSemaphoreGive(s_lock);
   return client;
 }
 

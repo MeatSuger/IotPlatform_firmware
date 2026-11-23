@@ -192,9 +192,15 @@ static bool apply_runtime_effects(const cJSON *config)
     if (cJSON_IsNumber(ri) && ri->valuedouble >= 1.0 &&
         ri->valuedouble <= 86400.0)
     {
-        g_reportIntervalMs = (uint32_t)(ri->valuedouble * 1000.0);
-        ESP_LOGI(TAG, "[appcfg] report interval -> %u ms",
-                      (unsigned)g_reportIntervalMs);
+        uint32_t interval = (uint32_t)(ri->valuedouble * 1000.0);
+        if (interval != g_reportIntervalMs)
+        {
+            g_reportIntervalMs = interval;
+            if (g_reportTask != NULL)
+                xTaskNotifyGive(g_reportTask); /* 新周期立即生效 */
+            ESP_LOGI(TAG, "[appcfg] report interval -> %u ms",
+                          (unsigned)g_reportIntervalMs);
+        }
     }
 
     const cJSON *acts = cJSON_GetObjectItem(config, "actuators");
