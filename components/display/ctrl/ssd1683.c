@@ -23,7 +23,9 @@ static const char *TAG = "ssd1683";
 
 /* 0x22：0xF7 = Load LUT(3-color) + DISPLAY(3-color)；0xFF 是黑白模式 */
 #define SSD_REFRESH_ARG 0xF7
-#define SSD_REFRESH_TIMEOUT_MS 30000
+/* 3 色整屏刷新 ≈26 s @25℃，低温/新屏更慢：留足余量，超时只用于兜底死等。
+ * 30 s 在实测板上卡点（屏已刷完却回 img_error）。 */
+#define SSD_REFRESH_TIMEOUT_MS 60000
 
 static uint8_t *s_bw;  /* BW 平面：1=白 0=黑 */
 static uint8_t *s_red; /* RED 平面：1=红 */

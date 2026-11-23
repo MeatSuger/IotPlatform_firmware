@@ -9,7 +9,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "cJSON.h"
 
@@ -23,18 +23,15 @@ static bool s_storage_mounted;
 
 static FILE  *s_fp;
 static char   s_name[IMG_NAME_MAX];        // 落盘占位名 image1/2.bin
-static char   s_cur_path[IMG_PATH_MAX];
 static size_t s_total;
 static size_t s_received;
 static bool   s_is_panel;
 static int    s_slot = -1;                 // 本次占用的槽位：0=image1.bin,1=image2.bin
 
 static TaskHandle_t     s_show_task;
-static SemaphoreHandle_t s_show_sem;
+static QueueHandle_t    s_show_q;               // 待刷槽位(1 深)
 static volatile int     s_reading_slot = -1;   // 刷屏任务正在读的槽位
 static volatile int     s_queued_slot  = -1;   // 已排队待刷的槽位
-static char             s_show_path[IMG_PATH_MAX];
-static char             s_show_name[IMG_NAME_MAX];
 
 static void reply(const char *fmt, ...)
 {
@@ -72,7 +69,6 @@ static void transfer_reset(void)
     s_total = 0;
     s_received = 0;
     s_name[0] = '\0';
-    s_cur_path[0] = '\0';
     s_is_panel = false;
     s_slot = -1;
 }
@@ -87,25 +83,30 @@ static int file_reader(void *ctx, uint8_t *buf, size_t len)
 static void show_task(void *arg)
 {
     (void)arg;
-    while (true) {
-        if (xSemaphoreTake(s_show_sem, portMAX_DELAY) != pdTRUE) {
+    for (;;) {
+        int slot;
+        if (xQueueReceive(s_show_q, &slot, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-
-        int slot = s_queued_slot;
         s_queued_slot = -1;
         s_reading_slot = slot;
 
-        FILE *fp = fopen(s_show_path, "rb");
+        // 槽位即文件名,路径在这里推导,避免接收路径与刷屏路径共享缓冲
+        char path[IMG_PATH_MAX];
+        char name[IMG_NAME_MAX];
+        image_path(slot, path, sizeof(path));
+        snprintf(name, sizeof(name), "image%d.bin", slot + 1);
+
+        FILE *fp = fopen(path, "rb");
         if (fp == NULL) {
-            ESP_LOGE(TAG, "reopen %s failed", s_show_path);
+            ESP_LOGE(TAG, "reopen %s failed", path);
             reply("{\"type\":\"img_error\",\"reason\":\"reopen failed\"}");
         } else {
-            ESP_LOGI(TAG, "displaying %s on panel ...", s_show_name);
+            ESP_LOGI(TAG, "displaying %s on panel ...", name);
             esp_err_t err = display_show(file_reader, fp);
             fclose(fp);
             if (err == ESP_OK) {
-                reply("{\"type\":\"img_shown\",\"name\":\"%s\"}", s_show_name);
+                reply("{\"type\":\"img_shown\",\"name\":\"%s\"}", name);
             } else {
                 reply("{\"type\":\"img_error\",\"reason\":\"panel refresh failed\"}");
             }
@@ -134,13 +135,13 @@ static void finish_ok(void)
     reply("{\"type\":\"img_done\",\"name\":\"%s\",\"bytes\":%u}", s_name, (unsigned)s_received);
 
     if (s_is_panel && s_slot >= 0) {
-        // 收满才排队刷屏,槽位占用到刷完
-        strncpy(s_show_path, s_cur_path, sizeof(s_show_path) - 1);
-        s_show_path[sizeof(s_show_path) - 1] = '\0';
-        strncpy(s_show_name, s_name, sizeof(s_show_name) - 1);
-        s_show_name[sizeof(s_show_name) - 1] = '\0';
-        s_queued_slot = s_slot;
-        xSemaphoreGive(s_show_sem);
+        // 收满才排队刷屏,槽位占用到刷完；深度 1,接收路径已用 pick_slot 排他
+        const int slot = s_slot;
+        s_queued_slot = slot;
+        if (s_show_q == NULL || xQueueSend(s_show_q, &slot, 0) != pdTRUE) {
+            s_queued_slot = -1;
+            ESP_LOGW(TAG, "show queue unavailable, skip refresh");
+        }
     }
 
     s_is_panel = false;
@@ -205,17 +206,18 @@ static void on_text(const uint8_t *data, int len)
             return;
         }
 
+        char path[IMG_PATH_MAX];
         s_slot = slot;
-        image_path(slot, s_cur_path, sizeof(s_cur_path));
+        image_path(slot, path, sizeof(path));
         snprintf(s_name, sizeof(s_name), "image%d.bin", slot + 1);
 
-        ESP_LOGI(TAG, "img start: %s <- [%s] size=%u%s", s_cur_path,
+        ESP_LOGI(TAG, "img start: %s <- [%s] size=%u%s", path,
                  cJSON_IsString(name) ? name->valuestring : "?", (unsigned)total,
                  is_panel ? " (panel bitmap)" : "");
 
-        s_fp = fopen(s_cur_path, "wb");
+        s_fp = fopen(path, "wb");
         if (s_fp == NULL) {
-            ESP_LOGE(TAG, "open %s failed", s_cur_path);
+            ESP_LOGE(TAG, "open %s failed", path);
             reply("{\"type\":\"img_error\",\"reason\":\"open failed\"}");
             s_name[0] = '\0';
             cJSON_Delete(root);
@@ -279,10 +281,10 @@ esp_err_t img_recv_start(img_send_text_t send_text)
         s_storage_mounted = true;
     }
 
-    if (s_show_sem == NULL) {
-        s_show_sem = xSemaphoreCreateBinary();
-        if (s_show_sem == NULL) {
-            ESP_LOGE(TAG, "semaphore create failed");
+    if (s_show_q == NULL) {
+        s_show_q = xQueueCreate(1, sizeof(int));
+        if (s_show_q == NULL) {
+            ESP_LOGE(TAG, "show queue create failed");
             return ESP_ERR_NO_MEM;
         }
     }

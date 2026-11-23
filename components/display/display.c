@@ -29,7 +29,7 @@ static const display_ctrl_t *s_ctrl; /* 探测结果 */
 /* BUSY 观察窗：窗口内没忙按已完成处理 */
 #define DISPLAY_BUSY_APPEAR_MS 300
 #define DISPLAY_INIT_TIMEOUT_MS 10000
-#define DISPLAY_REFRESH_TIMEOUT_MS 30000
+#define DISPLAY_REFRESH_TIMEOUT_MS 60000
 
 static spi_device_handle_t s_spi;
 static bool s_bus_ready;
@@ -365,11 +365,10 @@ esp_err_t display_show(display_read_t read_cb, void *ctx) {
     ESP_LOGI(TAG, "刷新%s,%u ms", err == ESP_OK ? "完成" : "失败",
              (unsigned)((esp_timer_get_time() - t0) / 1000));
   }
-  if (err == ESP_OK) {
-    // 刷完进深睡；下次 show 由 display_init() 重新初始化
-    s_ctrl->sleep();
-    s_inited = false;
-  }
+  // 超时也可能是屏已刷完但 BUSY 没释放：两种结果都进深睡，否则面板保持唤醒耗电；
+  // 下次 show 由 display_init() 重新 bringup。
+  s_ctrl->sleep();
+  s_inited = false;
 
   display_pm_unlock();
   xSemaphoreGive(lock);
