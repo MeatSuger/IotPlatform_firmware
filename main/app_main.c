@@ -1,10 +1,14 @@
+#include <stdlib.h>
+
 #include "app.h"
 #include "appcfg.h"
+#include "cJSON.h"
 #include "common.h"
 #include "display.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "esp_system.h"
 #include "mqtt_app.h"
 #include "network.h"
 #include "nvs_flash.h"
@@ -13,6 +17,7 @@
 #include "sensor.h"
 #include "token.h"
 #include "wifi.h"
+#include "psa/crypto.h"
 
 static const char *TAG = "app_main";
 
@@ -45,9 +50,9 @@ static QueueHandle_t s_netReqQ;
 
 /* 面板引脚是板载固定接线：开机即占位,防止云端把它分配给普通执行器 */
 static void panel_pins_claim(void) {
-  static const int pins[] = {DISPLAY_PIN_MOSI, DISPLAY_PIN_SCK, DISPLAY_PIN_CS,
-                             DISPLAY_PIN_DC, DISPLAY_PIN_RST,
-                             DISPLAY_PIN_BUSY};
+  static const int pins[] = {DISPLAY_PIN_MOSI, DISPLAY_PIN_SCK,
+                             DISPLAY_PIN_CS,   DISPLAY_PIN_DC,
+                             DISPLAY_PIN_RST,  DISPLAY_PIN_BUSY};
   for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
     if (!periph_pin_claim(pins[i], "panel"))
       ESP_LOGW(TAG, "GPIO%d already claimed, panel pin not reserved", pins[i]);
@@ -105,6 +110,45 @@ static void backoff_restart(const char *why) {
   esp_restart();
 }
 
+/* 面板信息复用现有 telemetry 通道：发一条不带 sensors 的 telemetry 消息。
+ * 后端在 DeviceStatusDTO 里解析 panel；不再单独开 HTTPS，也不新增主题。 */
+static void report_panel_mqtt(void) {
+  const char *chip = display_chip_id();
+  const display_info_t *info = display_info();
+  if (chip == NULL || info == NULL) {
+    ESP_LOGD(TAG, "Panel not initialized, skip panel report");
+    return;
+  }
+
+  cJSON *body = cJSON_CreateObject();
+  if (body == NULL) {
+    return;
+  }
+  cJSON *panel = cJSON_AddObjectToObject(body, "panel");
+  if (panel == NULL) {
+    cJSON_Delete(body);
+    return;
+  }
+  cJSON_AddStringToObject(panel, "chip", chip);
+  cJSON_AddNumberToObject(panel, "width", info->width);
+  cJSON_AddNumberToObject(panel, "height", info->height);
+
+  char *payload = cJSON_PrintUnformatted(body);
+  cJSON_Delete(body);
+  if (payload == NULL) {
+    return;
+  }
+
+  int msg_id = mqtt_publish_qos(MQTT_TOPIC_DATA, payload, strlen(payload), 1);
+  if (msg_id < 0) {
+    ESP_LOGW(TAG, "Panel telemetry report failed");
+  } else {
+    ESP_LOGI(TAG, "Panel reported via telemetry: %s %ux%u", chip, info->width,
+             info->height);
+  }
+  free(payload);
+}
+
 /* 认证(可选)→ 拉取离线命令 → 重建 MQTT → 面板上报。
  * full_reauth=false 复用 Token,true 用引导密钥重新认证。
  * 只在网络任务里调用,句柄生命周期永远由同一任务持有。 */
@@ -121,17 +165,30 @@ static void net_connect(bool full_reauth) {
 
   syncPendingCommands();
 
+  /* 新客户端尚未连上，先清标志，避免旧连接状态让面板上报抢跑 */
+  g_isMQTTConnected = false;
+
   esp_mqtt_client_handle_t client = mqtt_app_create();
   if (client == NULL)
     backoff_restart("Failed to create MQTT client");
   mqtt_app_start(client);
 
-  /* 面板上报放最后：探测 + HTTPS 较慢,失败也不影响连接。
-   * 全新设备没有 epd 配置,appcfg_replay 不会探测面板,这里兜底初始化,
+  /* 面板信息也走 MQTT：等连接成功后再发；未连上就跳过，下次重连再报。 */
+  for (int i = 0; i < 100 && !g_isMQTTConnected; i++)
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+  if (!g_isMQTTConnected) {
+    ESP_LOGW(TAG, "MQTT not connected, skip panel report");
+    return;
+  }
+
+  /* 全新设备没有 epd 配置,appcfg_replay 不会探测面板,这里兜底初始化,
    * 否则拿不到芯片型号；上报失败留到下次重连再试。 */
+  ESP_LOGI(TAG, "panel report, free heap %u",
+           (unsigned)esp_get_free_heap_size());
   if (display_chip_id() == NULL)
     display_init();
-  reportPanelInfo();
+  report_panel_mqtt();
 }
 
 /* 常驻网络任务(栈 10KB：TLS 握手 + 命令同步都必须在自己栈上跑)：
@@ -149,7 +206,8 @@ static void networkTask(void *pv) {
   }
 
   net_req_t req;
-  if (xQueueReceive(s_netReqQ, &req, pdMS_TO_TICKS(NET_START_WAIT_MS)) != pdTRUE)
+  if (xQueueReceive(s_netReqQ, &req, pdMS_TO_TICKS(NET_START_WAIT_MS)) !=
+      pdTRUE)
     backoff_restart("Network start timeout");
 
   net_connect(false);
@@ -209,9 +267,8 @@ static void superviseTask(void *pv) {
     if (wifi_was_down) {
       ESP_LOGW(TAG, "WiFi disconnected, waiting for reconnect...");
       g_isMQTTConnected = false;
-      mqttDownSince = 0; /* 由下方 WiFi 恢复流程接管 */
-      mqttStuckWaitMs =
-          MQTT_STUCK_DEADLINE_MS; /* 重建连接后归位 */
+      mqttDownSince = 0;                        /* 由下方 WiFi 恢复流程接管 */
+      mqttStuckWaitMs = MQTT_STUCK_DEADLINE_MS; /* 重建连接后归位 */
 
       /* esp_wifi 会自动重连；最多等 4×30s */
       bool reconnected = false;
@@ -261,7 +318,10 @@ static void superviseTask(void *pv) {
 
 void app_main(void) {
   ESP_LOGI(TAG, "Device starting...");
-
+  psa_status_t status = psa_crypto_init();
+  if (status != PSA_SUCCESS) {
+    ESP_LOGI(TAG, "TLS init failed (PSA error %d), aborting", (int)status);
+  }
   /* --- 工厂复位 --- */
   factory_reset_check();
 
@@ -273,8 +333,10 @@ void app_main(void) {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  ESP_LOGI(TAG, "free heap after NVS: %u", (unsigned)esp_get_free_heap_size());
 
-  /* DFS 160↔80 MHz + 空闲 light sleep；USB-JTAG 连接时 sdkconfig 自动禁用睡眠 */
+  /* DFS 160↔80 MHz + 空闲 light sleep；USB-JTAG 连接时 sdkconfig 自动禁用睡眠
+   */
   esp_pm_config_t pm_config = {
       .max_freq_mhz = 160,
       .min_freq_mhz = 80,
@@ -285,13 +347,15 @@ void app_main(void) {
   /* 配置状态在 MQTT 事件前就绪 */
   appcfg_init();
 
-  /* 屏蔽 PHY 日志,避免 IDF 6.0 printf 锁崩溃 */
+  /* 屏蔽 PHY 日志,避免 IDF 6.0 printf 锁崩溃；mbedTLS 只保留告警/错误 */
   esp_log_level_set("phy", ESP_LOG_NONE);
   esp_log_level_set("wifi", ESP_LOG_WARN);
+  esp_log_level_set("mbedtls", ESP_LOG_WARN);
 
   /* --- WiFi --- */
   if (!wifi_init_sta())
     backoff_restart("WiFi connection failed");
+  ESP_LOGI(TAG, "free heap after WiFi: %u", (unsigned)esp_get_free_heap_size());
 
   /* 独立 OTA：固定 URL 检查一次，有新固件则写入并重启 */
   ota_check_on_boot();

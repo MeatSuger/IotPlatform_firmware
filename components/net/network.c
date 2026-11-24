@@ -12,7 +12,6 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "cJSON.h"
-#include "display.h"
 
 static const char *TAG = "net";
 
@@ -162,6 +161,16 @@ bool authbydeviceid(void)
 {
     ESP_LOGI(TAG, "Starting device authentication...");
 
+    /* NVS 已有 Token 就直接复用：省掉一次 TLS 握手和一份 HTTP 堆；
+     * Token 失效时 MQTT CONNACK 会拒绝，再由恢复流程走 full re-auth。 */
+    char *cached = token_load();
+    if (cached != NULL && strlen(cached) > 0) {
+        free(cached);
+        ESP_LOGI(TAG, "Using cached device token, skip token request");
+        return true;
+    }
+    free(cached);
+
     http_resp_buf_t *rb = NULL;
     int httpCode = 0;
     const esp_err_t err = http_request(TOKEN_URL, "X-Device-Secret",
@@ -213,62 +222,6 @@ bool authbydeviceid(void)
     if (!authSuccess)
         ESP_LOGE(TAG, "Authentication failed: cannot retrieve token");
     return authSuccess;
-}
-
-/* 未知字段后端会忽略并返回 200,打印业务码便于发现未落库 */
-bool reportPanelInfo(void)
-{
-    const char *chip = display_chip_id();
-    const display_info_t *info = display_info();
-    if (chip == NULL || info == NULL) {
-        ESP_LOGD(TAG, "Panel not initialized, skip panel report");
-        return false;
-    }
-
-    char *token = token_load();
-    if (token == NULL || strlen(token) == 0) {
-        free(token);
-        return false;
-    }
-
-    cJSON *body = cJSON_CreateObject();
-    if (body == NULL) {
-        free(token);
-        return false;
-    }
-    cJSON_AddStringToObject(body, "panelChip", chip);
-    cJSON_AddNumberToObject(body, "panelWidth", info->width);
-    cJSON_AddNumberToObject(body, "panelHeight", info->height);
-    char *payload = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    if (payload == NULL) {
-        free(token);
-        return false;
-    }
-
-    http_resp_buf_t *rb = NULL;
-    int httpCode = 0;
-    const esp_err_t err = http_request(DEVICE_UPDATE_URL, "X-Device-Token",
-                                       token, payload, &rb, &httpCode);
-    free(token);
-    free(payload);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Panel report failed: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    bool ok = false;
-    if (httpCode == 200 && parse_api_code(rb->data) == 200) {
-        ESP_LOGI(TAG, "Panel reported: %s %ux%u", chip, info->width,
-                 info->height);
-        ok = true;
-    } else {
-        ESP_LOGW(TAG, "Panel report rejected: http=%d body=%.120s", httpCode,
-                 rb->data);
-    }
-
-    resp_buf_free(rb);
-    return ok;
 }
 
 /* 拉取即消费,必须按 id 升序入队,否则会丢离线命令 */

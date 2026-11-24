@@ -13,12 +13,9 @@
 #define API_HOST          "api.meatsuger.top"
 #define DATA_PULL_URL     "https://" API_HOST "/api/devices/" DEVICE_ID "/commands"
 #define TOKEN_URL         "https://" API_HOST "/api/devices/" DEVICE_ID "/token"
-/* 上报面板芯片与分辨率 */
-#define DEVICE_UPDATE_URL "https://" API_HOST "/api/devices/" DEVICE_ID "/update"
-
 /* OTA 总开关：1 = 开机联网后检查固定地址固件并按需升级。
  * 0 = OTA 代码整体不编译，esp_https_ota 也不参与链接。 */
-#define OTA_ENABLE        1
+#define OTA_ENABLE        0
 
 /* 独立 OTA：固件镜像固定地址(仅 https，仅 OTA_ENABLE 时生效)。
  * 开机联网后检查镜像头版本，与运行版本不同则升级并重启。 */

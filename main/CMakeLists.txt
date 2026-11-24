@@ -10,6 +10,7 @@ idf_component_register(
         core
         display
         esp_driver_gpio
+        espressif__cjson
         esp_pm
         mqtt_app
         net

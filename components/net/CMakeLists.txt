@@ -4,7 +4,6 @@ idf_component_register(
     SRCS "network.c" "token.c" "net_parse.c"
     INCLUDE_DIRS "include"
     REQUIRES
-        display
         core
         espressif__cjson
         esp_http_client
