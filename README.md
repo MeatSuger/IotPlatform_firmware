@@ -36,6 +36,11 @@ ESP32-S3 设备固件,基于 ESP-IDF 构建,支持 WiFi 联网、MQTT 双向通�
 - LED 状态指示
 - **OTA 升级**：固件内置固定 HTTPS 地址(`config.h` 的 `OTA_FW_URL`),开机联网后
   检查镜像头版本,有新版本才下载并重启;不经 MQTT,也不读云端 `config.ota`
+- **MP3 播放**：MQTT 命令带 HTTP(S) 直链,固件流式下载并解码为 PWM 音频输出
+  (无源蜂鸣器/压电片)。执行器 `specs.transport=mp3`,命令
+  `{"action":"spk1","value":{"url":"..."}}`；`{"op":"stop"}` 停止。
+  也可经现有图片二进制通道上传 MP3 到 `/fatfs/audio.mp3` 后发 `{"op":"play_file"}`，
+  避免设备再开 HTTP/TLS。内存紧张时优先用 HTTP 直链，HTTPS 会额外占用 TLS 堆
 - Token 管理
 
 ## 模块结构(ESP-IDF 组件化布局,见 https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/api-guides/build-system.html )
@@ -45,7 +50,7 @@ firmware/
 ├── CMakeLists.txt              # 顶层 CMake(ESP-IDF 项目)
 ├── main/                       # 应用入口组件(仅 app_main 装配与全局状态)
 │   ├── CMakeLists.txt
-│   ├── idf_component.yml       # 第三方依赖清单(espressif/mqtt·cjson·led_strip)
+│   ├── idf_component.yml       # 第三方依赖清单(espressif/mqtt·cjson·led_strip·esphome/micro-mp3)
 │   └── app_main.c
 ├── components/                 # 业务组件(每组件 = 独立 CMakeLists + include/ 头文件 + 同级 .c 实现)
 │   ├── core/                   # 共享基础设施(common.h 调试宏/全局声明 + config.h 常量,纯头组件)
@@ -54,10 +59,11 @@ firmware/
 │   ├── mqtt_app/               # MQTT 客户端(WSS 连接/订阅下行/遥测发布)+ 认证拒绝检测
 │   ├── appcfg/                 # 配置快照状态机(NVS 持久化/version 幂等/回执/重启重放)
 │   ├── periph/                 # 声明式外设总线(device/driver 模型)：按执行器定义
-│   │                           #   config.transport(gpio/pwm/spi/led_strip) 实例化,引脚仲裁
+│   │                           #   config.transport(gpio/pwm/spi/led_strip/epd/mp3) 实例化,引脚仲裁
 │   ├── display/                # 显示层：面板无关 API(display.h)+ 控制器适配(display_ctrl.h)
 │   │                           #   ctrl/ 下按面板拆分：ssd1683.c(4.2" BWR)、
 │   │                           #   jd79665.c(3.98" BWRY)；开机按 BUSY 极性自动识别
+│   ├── audio/                  # MP3 流播放：HTTP(S) 取流 + micro-mp3 解码 → PCM 环形缓冲
 │   ├── img/                    # 图片接收：控制帧 + 二进制分片 → FatFS(/fatfs) → 刷屏
 │   ├── ota/                    # 独立 HTTPS 升级(固定 URL,开机检查镜像版本→写入→重启)
 │   └── app/                    # 应用运行时(周期上报/命令分发任务 + 传感器按 type 采集器上报)
@@ -106,7 +112,7 @@ idf.py -p /dev/ttyUSB0 monitor
 编译前确认：
 
 - `components/core/include/config.h`：`DEVICE_ID`(注册响应中的 `deviceId`)、
-  `API_HOST` / `DEVICE_UPDATE_URL` / `MQTT_BROKER_PATH`(平台域名与接入路径)、
+  `API_HOST` / `MQTT_BROKER_PATH`(平台域名与接入路径)、
   `OTA_ENABLE`(0 关闭 OTA)、`OTA_FW_URL`(固件镜像固定地址)
 - `components/core/include/secrets.h`：`DEVICE_SECRET`(注册响应中的 `deviceSecret`,
   仅返回一次；换设备/重置后需同步更新)。该文件已在 `.gitignore` 中,不要提交。
@@ -121,6 +127,7 @@ WiFi 不预置 SSID/密码：首次上电进入 SmartConfig 配网,凭据由手�
 | `espressif/mqtt` | 1.1.0 | MQTT 客户端 |
 | `espressif/cjson` | 1.7.19 | JSON 解析 |
 | `espressif/led_strip` | 3.0.3 | WS2812 LED 驱动 |
+| `esphome/micro-mp3` | 0.4.0 | MP3 流式解码(Apache-2.0) |
 
 ## License
 

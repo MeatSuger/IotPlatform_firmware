@@ -116,6 +116,41 @@ static void show_task(void *arg)
     }
 }
 
+/* 首次收文件时才挂载 FatFS：不用图片/音频的设备不占这份堆。 */
+static esp_err_t img_recv_ensure(void)
+{
+    if (!s_storage_mounted) {
+        esp_err_t err = fatfs_store_mount();
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_storage_mounted = true;
+    }
+    return ESP_OK;
+}
+
+/* 只有真正要刷墨水屏时才建队列/刷屏任务；音频/raw 文件不需要 6KB 任务栈。 */
+static esp_err_t img_recv_ensure_display(void)
+{
+    if (s_show_q == NULL) {
+        s_show_q = xQueueCreate(1, sizeof(int));
+        if (s_show_q == NULL) {
+            ESP_LOGE(TAG, "show queue create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (s_show_task == NULL) {
+        // 栈 6KB：只读文件并流式喂驱动
+        if (xTaskCreate(show_task, "img_show", 6 * 1024, NULL, 4, &s_show_task) != pdPASS) {
+            ESP_LOGE(TAG, "show task create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    return ESP_OK;
+}
+
 // 两个槽位都在用时返回 -1
 static int pick_slot(void)
 {
@@ -165,6 +200,14 @@ static void on_text(const uint8_t *data, int len)
     }
 
     if (strcmp(type->valuestring, "img_start") == 0) {
+        esp_err_t init_err = img_recv_ensure();
+        if (init_err != ESP_OK) {
+            ESP_LOGE(TAG, "storage init failed: %s", esp_err_to_name(init_err));
+            reply("{\"type\":\"img_error\",\"reason\":\"storage init failed\"}");
+            cJSON_Delete(root);
+            return;
+        }
+
         const cJSON *name = cJSON_GetObjectItem(root, "name");
         const cJSON *size = cJSON_GetObjectItem(root, "size");
         const cJSON *kind = cJSON_GetObjectItem(root, "kind");
@@ -180,8 +223,18 @@ static void on_text(const uint8_t *data, int len)
         }
 
         bool is_panel = cJSON_IsString(kind) && strcmp(kind->valuestring, "epd2bpp") == 0;
+        bool is_audio = cJSON_IsString(kind) && strcmp(kind->valuestring, "audio") == 0;
 
         // 未配 epd 执行器时 display 未初始化,先初始化才能取帧大小
+        if (is_panel) {
+            esp_err_t disp_err = img_recv_ensure_display();
+            if (disp_err != ESP_OK) {
+                ESP_LOGE(TAG, "display init failed: %s", esp_err_to_name(disp_err));
+                reply("{\"type\":\"img_error\",\"reason\":\"display init failed\"}");
+                cJSON_Delete(root);
+                return;
+            }
+        }
         if (is_panel && display_init() != ESP_OK) {
             ESP_LOGE(TAG, "panel init failed");
             reply("{\"type\":\"img_error\",\"reason\":\"panel init failed\"}");
@@ -197,23 +250,29 @@ static void on_text(const uint8_t *data, int len)
             return;
         }
 
-        // 避开正在刷的槽位
-        int slot = pick_slot();
-        if (slot < 0) {
-            ESP_LOGW(TAG, "both slots busy (refresh in progress)");
-            reply("{\"type\":\"img_error\",\"reason\":\"busy\"}");
-            cJSON_Delete(root);
-            return;
-        }
-
         char path[IMG_PATH_MAX];
-        s_slot = slot;
-        image_path(slot, path, sizeof(path));
-        snprintf(s_name, sizeof(s_name), "image%d.bin", slot + 1);
+        if (is_audio) {
+            // 音频固定落盘路径，不占用图片双槽
+            snprintf(path, sizeof(path), FATFS_MOUNT_POINT "/audio.mp3");
+            snprintf(s_name, sizeof(s_name), "audio.mp3");
+            s_slot = -1;
+        } else {
+            // 避开正在刷的槽位
+            int slot = pick_slot();
+            if (slot < 0) {
+                ESP_LOGW(TAG, "both slots busy (refresh in progress)");
+                reply("{\"type\":\"img_error\",\"reason\":\"busy\"}");
+                cJSON_Delete(root);
+                return;
+            }
+            s_slot = slot;
+            image_path(slot, path, sizeof(path));
+            snprintf(s_name, sizeof(s_name), "image%d.bin", slot + 1);
+        }
 
         ESP_LOGI(TAG, "img start: %s <- [%s] size=%u%s", path,
                  cJSON_IsString(name) ? name->valuestring : "?", (unsigned)total,
-                 is_panel ? " (panel bitmap)" : "");
+                 is_audio ? " (audio)" : is_panel ? " (panel bitmap)" : "");
 
         s_fp = fopen(path, "wb");
         if (s_fp == NULL) {
@@ -228,7 +287,8 @@ static void on_text(const uint8_t *data, int len)
         s_received = 0;
         s_is_panel = is_panel;
         reply("{\"type\":\"img_ready\",\"name\":\"%s\",\"size\":%u,\"kind\":\"%s\"}",
-              s_name, (unsigned)total, is_panel ? "epd2bpp" : "raw");
+              s_name, (unsigned)total,
+              is_audio ? "audio" : is_panel ? "epd2bpp" : "raw");
 
     } else if (strcmp(type->valuestring, "img_end") == 0) {
         if (s_fp == NULL) {
@@ -270,31 +330,8 @@ static void on_binary(const uint8_t *data, int len)
 
 esp_err_t img_recv_start(img_send_text_t send_text)
 {
+    // 只记录回执回调；FatFS 与刷屏任务延迟到首次 img_start。
     s_send = send_text;
-
-    // 只挂一次,失败可重试
-    if (!s_storage_mounted) {
-        esp_err_t err = fatfs_store_mount();
-        if (err != ESP_OK) {
-            return err;
-        }
-        s_storage_mounted = true;
-    }
-
-    if (s_show_q == NULL) {
-        s_show_q = xQueueCreate(1, sizeof(int));
-        if (s_show_q == NULL) {
-            ESP_LOGE(TAG, "show queue create failed");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    if (s_show_task == NULL) {
-        // 栈 6KB：只读文件并流式喂驱动
-        if (xTaskCreate(show_task, "img_show", 6 * 1024, NULL, 4, &s_show_task) != pdPASS) {
-            ESP_LOGE(TAG, "show task create failed");
-            return ESP_ERR_NO_MEM;
-        }
-    }
     return ESP_OK;
 }
 

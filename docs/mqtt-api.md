@@ -10,7 +10,7 @@
 | 订阅(命令) | `iot/90431b/cmd`(QoS1) |
 | 订阅(配置快照) | `iot/90431b/config`(QoS1 + retained) |
 | 发布(配置回执) | `iot/90431b/config/report`(QoS1) |
-| 发布(遥测) | `iot/90431b/telemetry` |
+| 发布(遥测) | `iot/90431b/telemetry`(面板信息也走此通道) |
 
 ## 设备引导与凭证
 
@@ -46,7 +46,7 @@ X-Device-Secret: <deviceSecret>
 设备端**不做器件语义假设**,一切由云端下发的物模型定义驱动：
 
 - **写入类设备**(继电器/风扇/舵机/灯带/DAC 等)→ 云端 `actuators[]` 定义,固件按其
-  `specs.transport`(`gpio` / `pwm` / `spi` / `led_strip` / `epd`)实例化硬件；控制命令
+  `specs.transport`(`gpio` / `pwm` / `spi` / `led_strip` / `epd` / `mp3`)实例化硬件；控制命令
   `value` 下发**传输原语**(电平/占空比/脉宽/数据帧/颜色分量),角度、颜色等语义
   换算由云端完成。
 - **读取类设备**(温度/湿度等传感器)→ 云端 `sensors[]` 定义,固件按其 `type`
@@ -64,7 +64,7 @@ X-Device-Secret: <deviceSecret>
 | `iot/{id}/config` | 云端 → 设备 | 整体配置快照(retained,**订阅即拉取**；含执行器定义 `actuators`) |
 | `iot/{id}/config/report` | 设备 → 云端 | 配置回执(应用成功后,云端回写 `status=acked`) |
 | `iot/{id}/cmd` | 云端 → 设备 | 实时命令(控制执行器；离线由 HTTP `GET /commands` 兜底) |
-| `iot/{id}/telemetry` | 设备 → 云端 | 传感器遥测(`{"sensors":[...]}`,网关自动入库) |
+| `iot/{id}/telemetry` | 设备 → 云端 | 传感器遥测；连上后先发一条 `{"panel":{...}}` 面板信息 |
 
 ---
 
@@ -93,13 +93,15 @@ X-Device-Secret: <deviceSecret>
 ```json
 {"id":"fan1","driver":"servo","enabled":true,
  "specs":{"transport":"pwm","pin":18,"freq_hz":25000}}
+{"id":"spk1","driver":"speaker","enabled":true,
+ "specs":{"transport":"mp3","pin":5}}
 ```
 
 | 字段 | 说明 |
 |---|---|
 | `id` | 执行器标识符(`^[a-z][a-z0-9_]{0,10}$`)＝ 控制命令 `action` |
 | `driver` | 后端枚举占位(led/servo/speaker 三选一即可),**固件忽略** |
-| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip` / `epd`(固件注册表,可扩展) |
+| `specs.transport` | 设备类型：`gpio` / `pwm` / `spi` / `led_strip` / `epd` / `mp3`(固件注册表,可扩展) |
 | `specs.*` | transport 参数(见下) |
 | `enabled` | `false`(或缺省 true)→ 期望移除/不实例化 |
 
@@ -123,10 +125,16 @@ X-Device-Secret: <deviceSecret>
 | `spi` | `clk`/`mosi`/`cs` 必填；`miso` 可选；`freq_hz` 默认 1MHz；`mode` 默认 0 | `{"tx":"A5 3C FF"}` 或 `{"tx":[165,60,255]}` | SPI 主机写；同 host 总线引脚由首实例初始化、多设备独立 CS |
 | `led_strip` | `gpio` 默认 48；`count` 默认 1(可编译关闭) | `{"rgb":[255,0,0]}` | WS2812 灯带；rgb 原语作用于全部灯珠 |
 | `epd` | `size_inch` 屏幕英寸(展示用,固件忽略)；`width`/`height` 像素(宽为 8 的倍数)；`chip` 控制器型号(如 `ssd1683`)；`color_depth`：`bw` / `bwr` / `bwry` / `rgb565` / `rgb888` | `{"op":"selftest"}` | 墨水屏；面板固定接线,图片经 `iot/{id}/img/*` 二进制通道下发,不走命令原语 |
+| `mp3` | `pin` 必填(建议选空闲 GPIO，避开 4/7-12/19/20/26-37/43-46) | `{"url":"http(s)://.../a.mp3"}` / `{"op":"play_file"}` / `{"op":"stop"}` | HTTP(S) 直链流式播放，或播放经 `img/ctl`+`img/data` 上传的 `/fatfs/audio.mp3`(`kind:"audio"`)；40kHz PWM 载波，接无源蜂鸣器/压电片；同一时间只允许一个 mp3 设备 |
 
 > `epd` 的显示参数缺省时回退到编译期面板(兼容仅 `{"transport":"epd"}` 的存量定义)；
 > 当前固件内置 SSD1683 4.2" 400×300 BWR,`chip`/`width`/`height`/`color_depth` 与实物不符时
 > probe 失败并打日志。图片投递说明见 `components/img/include/img_recv.h`。
+
+> `mp3` 播放期间用软件 PWM 忙等输出，独占 Core 1；停止命令仍能通过命令任务
+> (Core 1 更高优先级)抢占。音质受蜂鸣器/压电片限制，适合语音提示，不适合音乐。
+> HTTPS 直链会额外占用一份 TLS 堆（与 MQTT WSS 并存）；内存紧张时优先用 HTTP 直链，
+> 或走现有图片二进制通道上传 MP3 到 `/fatfs/audio.mp3` 后发 `{"op":"play_file"}`。
 
 > 角度/颜色等**器件语义由云端换算成原语后下发**：舵机类 → `pulse_us`,调色 → `rgb`。
 
@@ -165,6 +173,9 @@ X-Device-Secret: <deviceSecret>
 {"id":42,"type":"control","payload":{"action":"relay1","value":{"level":1}}}        // gpio 继电器
 {"id":42,"type":"control","payload":{"action":"dac1","value":{"tx":"A5 3C FF"}}}    // spi 写
 {"id":42,"type":"control","payload":{"action":"led1","value":{"rgb":[255,0,0]}}}    // led_strip
+{"id":42,"type":"control","payload":{"action":"spk1","value":{"url":"http://server/a.mp3"}}} // mp3 直链播放
+{"id":42,"type":"control","payload":{"action":"spk1","value":{"op":"play_file"}}}         // 播放 /fatfs/audio.mp3
+{"id":42,"type":"control","payload":{"action":"spk1","value":{"op":"stop"}}}              // mp3 停止
 ```
 
 未知 action / value 格式错误：固件丢弃并打日志(无回执,见设计原则)。
@@ -202,6 +213,19 @@ X-Device-Secret: <deviceSecret>
 
 内置采集器：`temperature`(ESP32 内部温度,两位小数)。其余读类器件
 (I2C/SPI 传感器等)按需在固件注册新采集器,云端无需改动。
+
+---
+
+## 四、面板信息(复用 telemetry 通道)
+
+设备连上 MQTT 后先发一条不带 `sensors` 的 telemetry 消息(QoS1)，复用已有 WSS 连接：
+
+```json
+{"panel":{"chip":"ssd1683","width":400,"height":300}}
+```
+
+不新增主题；后端在 `DeviceStatusDTO.panel` 中解析。当前 `iot_device` 无面板列，
+网关只记录消息日志，设备卡片字段暂不落库。
 
 ---
 

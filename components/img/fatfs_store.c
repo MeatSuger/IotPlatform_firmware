@@ -30,6 +30,12 @@ static bool partition_is_blank(void)
 
 esp_err_t fatfs_store_mount(void)
 {
+    static bool mounted;
+
+    if (mounted) {
+        return ESP_OK;
+    }
+
     const bool blank = partition_is_blank();
     const esp_vfs_fat_mount_config_t cfg = {
         .format_if_mount_failed = blank,
@@ -49,5 +55,6 @@ esp_err_t fatfs_store_mount(void)
     }
 
     ESP_LOGI(TAG, "mounted %s (partition \"%s\")", FATFS_MOUNT_POINT, FATFS_PARTITION_LABEL);
+    mounted = true;
     return ESP_OK;
 }

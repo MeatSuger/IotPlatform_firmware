@@ -238,11 +238,8 @@ esp_mqtt_client_handle_t mqtt_app_create(void) {
   if (client == NULL)
     return NULL;
 
-  /* 挂 storage、建刷屏任务；失败只降级图片功能 */
-  esp_err_t img_err = img_recv_start(img_reply);
-  if (img_err != ESP_OK)
-    ESP_LOGW(TAG, "img_recv_start failed: %s (图片传输不可用)",
-             esp_err_to_name(img_err));
+  /* 只记录图片回执回调；首次投图时才挂载 FatFS/建刷屏任务，省开机堆 */
+  img_recv_start(img_reply);
 
   esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler,
                                  client);

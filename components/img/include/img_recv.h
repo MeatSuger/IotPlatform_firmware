@@ -10,8 +10,9 @@
 extern "C" {
 #endif
 
-/* 图片接收：JSON 控制帧 → 分片落 FatFS 双槽 → 独立任务刷屏。
- * kind="epd2bpp" 刷 2bpp 面板位图,其余文件只落盘。
+/* 图片接收：JSON 控制帧 → 分片落 FatFS → 独立任务刷屏。
+ * kind="epd2bpp" 刷 2bpp 面板位图；kind="audio" 落盘 /fatfs/audio.mp3；
+ * 其余文件只落盘。
  * 主题：img/ctl、img/data、img/reply。 */
 
 typedef enum {
@@ -26,7 +27,7 @@ typedef enum {
 
 typedef int (*img_send_text_t)(const char *text);
 
-/* 启动：挂载 storage 分区到 /fatfs 并创建刷屏任务；重复调用安全。 */
+/* 记录回执回调；首次 img_start 时才挂载 /fatfs 并创建刷屏任务。 */
 esp_err_t img_recv_start(img_send_text_t send_text);
 
 /* 处理一帧。返回 true = 已被图片接收逻辑消费。 */
